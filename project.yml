@@ -1,6 +1,6 @@
-name: tgip
+name: wave
 options:
-  bundleIdPrefix: com.tgip
+  bundleIdPrefix: com.wave
   deploymentTarget:
     macOS: "14.0"
   xcodeVersion: "16.0"
@@ -12,7 +12,7 @@ settings:
     MACOSX_DEPLOYMENT_TARGET: "14.0"
 
 targets:
-  tgip:
+  wave:
     type: application
     platform: macOS
     sources:
@@ -30,7 +30,8 @@ targets:
         type: folder
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.tgip.app
+        PRODUCT_BUNDLE_IDENTIFIER: com.wave.terminal
+        PRODUCT_NAME: wave
         INFOPLIST_FILE: tgip/Info.plist
         CODE_SIGN_ENTITLEMENTS: tgip/tgip.entitlements
         CODE_SIGN_STYLE: Automatic

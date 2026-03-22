@@ -3,6 +3,7 @@ build/
 DerivedData/
 *.xcuserdata
 *.xcworkspace
+*.xcodeproj
 xcuserdata/
 *.xcscmblueprint
 
