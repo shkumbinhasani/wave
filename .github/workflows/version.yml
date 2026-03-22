@@ -20,13 +20,13 @@ jobs:
         with:
           node-version: 20
 
-      - run: npm install
+      - run: npm install -g @changesets/cli
 
       - name: Create Release PR or Tag
         uses: changesets/action@v1
         with:
           title: "Release: version bump"
           commit: "chore: version bump"
-          publish: npm run release
+          publish: changeset tag
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
