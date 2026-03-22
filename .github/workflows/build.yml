@@ -1,0 +1,59 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Cache GhosttyKit
+        id: cache-ghostty
+        uses: actions/cache@v4
+        with:
+          path: Frameworks/GhosttyKit.xcframework
+          key: ghosttykit-${{ runner.os }}-${{ hashFiles('.ghostty-version') }}
+          restore-keys: ghosttykit-${{ runner.os }}-
+
+      - name: Build GhosttyKit
+        if: steps.cache-ghostty.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/ghostty-org/ghostty.git /tmp/ghostty
+          cd /tmp/ghostty
+          zig build -Demit-xcframework -Dxcframework-target=native --release=fast
+          mkdir -p $GITHUB_WORKSPACE/Frameworks
+          cp -R /tmp/ghostty/macos/GhosttyKit.xcframework $GITHUB_WORKSPACE/Frameworks/
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build
+        run: |
+          xcodebuild -project wave.xcodeproj \
+            -scheme wave \
+            -configuration Release \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wave-debug
+          path: build/Build/Products/Release/wave.app
+          retention-days: 7
