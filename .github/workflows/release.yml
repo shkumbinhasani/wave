@@ -56,7 +56,7 @@ jobs:
             -scheme wave \
             -configuration Release \
             -derivedDataPath build \
-            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
             MARKETING_VERSION="$VERSION" \
@@ -66,8 +66,8 @@ jobs:
       - name: Package
         run: |
           cd build/Build/Products/Release
-          # Strip linker adhoc signature so Sparkle only validates EdDSA
-          codesign --remove-signature wave.app
+          # Re-sign adhoc with stable identifier so Sparkle accepts it
+          codesign -s - --force --deep --identifier com.wave.terminal wave.app
           ditto -c -k --sequesterRsrc --keepParent wave.app wave-macos-arm64.zip
           mv wave-macos-arm64.zip $GITHUB_WORKSPACE/
 
