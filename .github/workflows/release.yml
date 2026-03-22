@@ -69,6 +69,17 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent wave.app wave-macos-arm64.zip
           mv wave-macos-arm64.zip $GITHUB_WORKSPACE/
 
+      - name: Sign update with Sparkle
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          SIGN_TOOL=$(find build/SourcePackages/artifacts -name "sign_update" -type f | head -1)
+          SIGNATURE=$("$SIGN_TOOL" wave-macos-arm64.zip -s "$SPARKLE_PRIVATE_KEY" 2>&1)
+          # Extract edSignature and length
+          ED_SIG=$(echo "$SIGNATURE" | grep -o 'sparkle:edSignature="[^"]*"' | cut -d'"' -f2)
+          echo "ED_SIGNATURE=$ED_SIG" >> $GITHUB_ENV
+          echo "Signature: $ED_SIG"
+
       - name: Generate Sparkle appcast
         run: |
           VERSION=${GITHUB_REF_NAME#v}
@@ -84,7 +95,7 @@ jobs:
                 <sparkle:version>${VERSION}</sparkle:version>
                 <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
                 <pubDate>$(date -R)</pubDate>
-                <enclosure url="${URL}" length="${SIZE}" type="application/octet-stream" sparkle:os="macos"/>
+                <enclosure url="${URL}" length="${SIZE}" type="application/octet-stream" sparkle:edSignature="${ED_SIGNATURE}" sparkle:os="macos"/>
               </item>
             </channel>
           </rss>

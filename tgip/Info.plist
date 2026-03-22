@@ -22,5 +22,9 @@
 	<string></string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>SUPublicEDKey</key>
+	<string>yxNVkNdLPLS9D3j9sW8gRVtLEi5KYHiJKr+ztzn1+xY=</string>
+	<key>SUFeedURL</key>
+	<string>https://github.com/shkumbinhasani/wave/releases/latest/download/appcast.xml</string>
 </dict>
 </plist>
