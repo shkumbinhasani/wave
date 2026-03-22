@@ -69,6 +69,27 @@ class TerminalManager: ObservableObject {
         }
     }
 
+    func moveSession(_ draggedID: UUID, before targetID: UUID, in directory: String) {
+        guard draggedID != targetID,
+              let draggedIndex = sessions.firstIndex(where: { $0.id == draggedID }),
+              let targetIndex = sessions.firstIndex(where: { $0.id == targetID }),
+              sessions[draggedIndex].workingDirectory == directory,
+              sessions[targetIndex].workingDirectory == directory else { return }
+
+        let dragged = sessions.remove(at: draggedIndex)
+        let adjustedTarget = draggedIndex < targetIndex ? targetIndex - 1 : targetIndex
+        sessions.insert(dragged, at: adjustedTarget)
+    }
+
+    func moveSessionToEndOfGroup(_ draggedID: UUID, in directory: String) {
+        guard let draggedIndex = sessions.firstIndex(where: { $0.id == draggedID }),
+              sessions[draggedIndex].workingDirectory == directory else { return }
+
+        let dragged = sessions.remove(at: draggedIndex)
+        let insertionIndex = sessions.lastIndex(where: { $0.workingDirectory == directory }).map { $0 + 1 } ?? sessions.count
+        sessions.insert(dragged, at: insertionIndex)
+    }
+
     // MARK: - Pinning
 
     func togglePin(path: String) {

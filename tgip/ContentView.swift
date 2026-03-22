@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @EnvironmentObject var manager: TerminalManager
@@ -246,6 +247,7 @@ struct DirectoryGroup: View {
     let groupIndex: Int
     let isFocused: Bool
     let focusedTabOffset: Int?
+    @State private var isDropTargeted = false
 
     private var meta: GroupMeta { manager.meta(for: fullPath) }
     private var label: String { meta.displayName ?? directory }
@@ -358,10 +360,16 @@ struct DirectoryGroup: View {
             } else {
                 ForEach(Array(sessions.enumerated()), id: \.element.id) { tabIndex, session in
                     let isTabFocused = isFocused && focusedTabOffset == tabIndex
-                    TabRow(session: session, isTabFocused: isTabFocused)
+                    TabRow(session: session, directory: fullPath, isTabFocused: isTabFocused)
                 }
             }
         }
+        .padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isDropTargeted ? Color.white.opacity(0.05) : Color.clear)
+        )
+        .onDrop(of: [UTType.text], delegate: GroupDropDelegate(directory: fullPath, isTargeted: $isDropTargeted, manager: manager))
     }
 }
 
@@ -370,6 +378,7 @@ struct DirectoryGroup: View {
 struct TabRow: View {
     @EnvironmentObject var manager: TerminalManager
     @ObservedObject var session: TerminalSession
+    let directory: String
     var isTabFocused: Bool = false
     @State private var hovering = false
 
@@ -424,7 +433,85 @@ struct TabRow: View {
             manager.selectedSessionID = session.id
             manager.focusedGroupIndex = nil
         }
+        .onDrag {
+            NSItemProvider(object: session.id.uuidString as NSString)
+        }
+        .onDrop(of: [UTType.text], delegate: TabDropDelegate(targetSession: session, directory: directory, manager: manager))
         .animation(.easeInOut(duration: 0.15), value: isHighlighted)
+    }
+}
+
+struct TabDropDelegate: DropDelegate {
+    let targetSession: TerminalSession
+    let directory: String
+    let manager: TerminalManager
+
+    func dropEntered(info: DropInfo) {
+        guard let draggedID = draggedSessionID(from: info) else { return }
+        manager.moveSession(draggedID, before: targetSession.id, in: directory)
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        draggedSessionID(from: info) != nil
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        draggedSessionID(from: info) != nil
+    }
+
+    private func draggedSessionID(from info: DropInfo) -> UUID? {
+        info.itemProviders(for: [UTType.text]).first.flatMap { provider in
+            var value: UUID?
+            let semaphore = DispatchSemaphore(value: 0)
+            provider.loadObject(ofClass: NSString.self) { object, _ in
+                if let string = object as? NSString {
+                    value = UUID(uuidString: String(string))
+                }
+                semaphore.signal()
+            }
+            _ = semaphore.wait(timeout: .now() + 0.1)
+            return value
+        }
+    }
+}
+
+struct GroupDropDelegate: DropDelegate {
+    let directory: String
+    @Binding var isTargeted: Bool
+    let manager: TerminalManager
+
+    func dropEntered(info: DropInfo) {
+        isTargeted = true
+    }
+
+    func dropExited(info: DropInfo) {
+        isTargeted = false
+    }
+
+    func validateDrop(info: DropInfo) -> Bool {
+        draggedSessionID(from: info) != nil
+    }
+
+    func performDrop(info: DropInfo) -> Bool {
+        isTargeted = false
+        guard let draggedID = draggedSessionID(from: info) else { return false }
+        manager.moveSessionToEndOfGroup(draggedID, in: directory)
+        return true
+    }
+
+    private func draggedSessionID(from info: DropInfo) -> UUID? {
+        info.itemProviders(for: [UTType.text]).first.flatMap { provider in
+            var value: UUID?
+            let semaphore = DispatchSemaphore(value: 0)
+            provider.loadObject(ofClass: NSString.self) { object, _ in
+                if let string = object as? NSString {
+                    value = UUID(uuidString: String(string))
+                }
+                semaphore.signal()
+            }
+            _ = semaphore.wait(timeout: .now() + 0.1)
+            return value
+        }
     }
 }
 
