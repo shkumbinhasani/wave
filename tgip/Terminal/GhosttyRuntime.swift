@@ -8,6 +8,8 @@ class GhosttyRuntime {
     var onAction: ((_ target: ghostty_target_s, _ action: ghostty_action_s) -> Bool)?
 
     init() {
+        Self.configureGhosttyEnvironment()
+
         guard ghostty_init(UInt(CommandLine.argc), CommandLine.unsafeArgv) == 0 else {
             NSLog("ghostty_init failed"); return
         }
@@ -18,6 +20,11 @@ class GhosttyRuntime {
         ghostty_config_load_default_files(cfg)
         ghostty_config_load_cli_args(cfg)
         ghostty_config_load_recursive_files(cfg)
+
+        if let bundledConfig = Bundle.main.path(forResource: "ghostty", ofType: "config") {
+            ghostty_config_load_file(cfg, bundledConfig)
+        }
+
         ghostty_config_finalize(cfg)
 
         var rt = ghostty_runtime_config_s()
@@ -73,6 +80,20 @@ class GhosttyRuntime {
             NSLog("ghostty_app_new failed"); return
         }
         self.app = ghosttyApp
+    }
+
+    private static func configureGhosttyEnvironment() {
+        guard let resourcesPath = Bundle.main.resourcePath else { return }
+
+        setenv("GHOSTTY_RESOURCES_DIR", resourcesPath, 1)
+
+        let terminfoPath = "\(resourcesPath)/terminfo"
+        setenv("TERMINFO", terminfoPath, 1)
+        setenv("TERMINFO_DIRS", terminfoPath, 1)
+
+        if let executablePath = Bundle.main.executableURL?.deletingLastPathComponent().path {
+            setenv("GHOSTTY_BIN_DIR", executablePath, 1)
+        }
     }
 
     deinit {

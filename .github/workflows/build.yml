@@ -43,6 +43,12 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Resolve SPM packages
+        run: |
+          xcodebuild -project wave.xcodeproj \
+            -scheme wave \
+            -resolvePackageDependencies
+
       - name: Build
         run: |
           xcodebuild -project wave.xcodeproj \

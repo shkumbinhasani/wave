@@ -4,6 +4,7 @@ import SwiftUI
 struct tgipApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var manager = TerminalManager()
+    @StateObject private var updater = UpdaterController()
 
     var body: some Scene {
         WindowGroup {
@@ -12,6 +13,12 @@ struct tgipApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates...") {
+                    updater.checkForUpdates()
+                }
+            }
+
             CommandGroup(after: .newItem) {
                 Button("New Tab") { manager.createSession() }
                     .keyboardShortcut("t", modifiers: .command)

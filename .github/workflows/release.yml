@@ -43,6 +43,12 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Resolve SPM packages
+        run: |
+          xcodebuild -project wave.xcodeproj \
+            -scheme wave \
+            -resolvePackageDependencies
+
       - name: Build Release
         run: |
           xcodebuild -project wave.xcodeproj \
@@ -60,10 +66,33 @@ jobs:
           ditto -c -k --sequesterRsrc --keepParent wave.app wave-macos-arm64.zip
           mv wave-macos-arm64.zip $GITHUB_WORKSPACE/
 
+      - name: Generate Sparkle appcast
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          URL="https://github.com/shkumbinhasani/wave/releases/download/${GITHUB_REF_NAME}/wave-macos-arm64.zip"
+          SIZE=$(stat -f%z wave-macos-arm64.zip)
+          cat > appcast.xml << EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>Wave Terminal</title>
+              <item>
+                <title>Version ${VERSION}</title>
+                <sparkle:version>${VERSION}</sparkle:version>
+                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+                <pubDate>$(date -R)</pubDate>
+                <enclosure url="${URL}" length="${SIZE}" type="application/octet-stream" sparkle:os="macos"/>
+              </item>
+            </channel>
+          </rss>
+          EOF
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: wave-macos-arm64.zip
+          files: |
+            wave-macos-arm64.zip
+            appcast.xml
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref, '-rc') || contains(github.ref, '-beta') }}
