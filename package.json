@@ -1,0 +1,13 @@
+{
+  "name": "wave",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release": "changeset tag"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.29.0"
+  }
+}

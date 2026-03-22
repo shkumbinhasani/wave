@@ -33,7 +33,10 @@ jobs:
         run: |
           git clone --depth 1 https://github.com/ghostty-org/ghostty.git /tmp/ghostty
           cd /tmp/ghostty
-          zig build -Demit-xcframework -Dxcframework-target=native --release=fast
+          # Build xcframework only — ignore app build failures
+          zig build -Demit-xcframework -Dxcframework-target=native --release=fast || true
+          # Verify the xcframework was produced
+          test -d /tmp/ghostty/macos/GhosttyKit.xcframework
           mkdir -p $GITHUB_WORKSPACE/Frameworks
           cp -R /tmp/ghostty/macos/GhosttyKit.xcframework $GITHUB_WORKSPACE/Frameworks/
 
