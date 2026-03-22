@@ -66,6 +66,8 @@ jobs:
       - name: Package
         run: |
           cd build/Build/Products/Release
+          # Strip linker adhoc signature so Sparkle only validates EdDSA
+          codesign --remove-signature wave.app
           ditto -c -k --sequesterRsrc --keepParent wave.app wave-macos-arm64.zip
           mv wave-macos-arm64.zip $GITHUB_WORKSPACE/
 
