@@ -51,6 +51,7 @@ jobs:
 
       - name: Build Release
         run: |
+          VERSION=${GITHUB_REF_NAME#v}
           xcodebuild -project wave.xcodeproj \
             -scheme wave \
             -configuration Release \
@@ -58,6 +59,8 @@ jobs:
             CODE_SIGN_IDENTITY="-" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
+            MARKETING_VERSION="$VERSION" \
+            CURRENT_PROJECT_VERSION="$VERSION" \
             build
 
       - name: Package
