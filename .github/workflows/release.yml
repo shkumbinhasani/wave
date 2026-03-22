@@ -73,12 +73,11 @@ jobs:
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
-          SIGN_TOOL=$(find build/SourcePackages/artifacts -name "sign_update" -type f | head -1)
-          SIGNATURE=$("$SIGN_TOOL" wave-macos-arm64.zip -s "$SPARKLE_PRIVATE_KEY" 2>&1)
-          # Extract edSignature and length
+          # Download Sparkle tools
+          curl -sL https://github.com/sparkle-project/Sparkle/releases/download/2.9.0/Sparkle-2.9.0.tar.xz | tar xJ -C /tmp
+          SIGNATURE=$(/tmp/bin/sign_update wave-macos-arm64.zip -s "$SPARKLE_PRIVATE_KEY" 2>&1)
           ED_SIG=$(echo "$SIGNATURE" | grep -o 'sparkle:edSignature="[^"]*"' | cut -d'"' -f2)
           echo "ED_SIGNATURE=$ED_SIG" >> $GITHUB_ENV
-          echo "Signature: $ED_SIG"
 
       - name: Generate Sparkle appcast
         run: |
