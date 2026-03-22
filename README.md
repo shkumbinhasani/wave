@@ -16,7 +16,13 @@ brew install shkumbinhasani/tap/wave
 
 ### Direct download
 
-Download `wave-macos-arm64.zip` from [Releases](https://github.com/shkumbinhasani/wave/releases/latest), unzip, and open. Wave will offer to move itself to `/Applications` on first launch.
+Download `wave-macos-arm64.zip` from [Releases](https://github.com/shkumbinhasani/wave/releases/latest), unzip, then **right-click → Open** (not double-click) on first launch. If you get "damaged and can't be opened", run:
+
+```bash
+xattr -cr /path/to/wave.app
+```
+
+Wave will offer to move itself to `/Applications` on first launch.
 
 ### Updates
 
