@@ -77,9 +77,9 @@ jobs:
           curl -sL https://github.com/sparkle-project/Sparkle/releases/download/2.9.0/Sparkle-2.9.0.tar.xz -o /tmp/sparkle.tar.xz
           tar xf /tmp/sparkle.tar.xz -C /tmp/sparkle
           SIGN_TOOL=$(find /tmp/sparkle -name "sign_update" -type f | head -1)
-          echo "Using: $SIGN_TOOL"
-          SIGNATURE=$("$SIGN_TOOL" wave-macos-arm64.zip -s "$SPARKLE_PRIVATE_KEY")
-          echo "Raw output: $SIGNATURE"
+          echo "$SPARKLE_PRIVATE_KEY" > /tmp/sparkle_key
+          SIGNATURE=$("$SIGN_TOOL" wave-macos-arm64.zip --ed-key-file /tmp/sparkle_key)
+          rm /tmp/sparkle_key
           ED_SIG=$(echo "$SIGNATURE" | grep -o 'sparkle:edSignature="[^"]*"' | cut -d'"' -f2)
           echo "ED_SIGNATURE=$ED_SIG" >> $GITHUB_ENV
 
