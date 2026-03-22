@@ -247,8 +247,6 @@ struct DirectoryGroup: View {
     let groupIndex: Int
     let isFocused: Bool
     let focusedTabOffset: Int?
-    @State private var isDropTargeted = false
-
     private var meta: GroupMeta { manager.meta(for: fullPath) }
     private var label: String { meta.displayName ?? directory }
 
@@ -360,84 +358,115 @@ struct DirectoryGroup: View {
             } else {
                 ForEach(Array(sessions.enumerated()), id: \.element.id) { tabIndex, session in
                     let isTabFocused = isFocused && focusedTabOffset == tabIndex
-                    TabRow(session: session, directory: fullPath, isTabFocused: isTabFocused)
+                    TabRow(session: session, directory: fullPath, isTabFocused: isTabFocused, isLast: tabIndex == sessions.count - 1)
                 }
+
             }
         }
         .padding(.vertical, 2)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(isDropTargeted ? Color.white.opacity(0.05) : Color.clear)
-        )
-        .onDrop(of: [UTType.text], delegate: GroupDropDelegate(directory: fullPath, isTargeted: $isDropTargeted, manager: manager))
     }
 }
 
 // MARK: - Tab Row
+
+// Shared drag state — avoids async NSItemProvider round-trips
+enum DragState {
+    static var draggedSessionID: UUID?
+}
 
 struct TabRow: View {
     @EnvironmentObject var manager: TerminalManager
     @ObservedObject var session: TerminalSession
     let directory: String
     var isTabFocused: Bool = false
+    var isLast: Bool = false
     @State private var hovering = false
+    @State private var isDropTarget = false
+    @State private var dropAtEnd = false
 
     private var isSelected: Bool {
         manager.selectedSessionID == session.id
     }
 
-    private var isHighlighted: Bool {
-        isSelected || isTabFocused || hovering
+    private var isDragging: Bool {
+        DragState.draggedSessionID == session.id
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(session.isRunning ? Color.green : Color.gray)
-                .frame(width: 6, height: 6)
+        VStack(spacing: 0) {
+            // Drop indicator line above
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Color.accentColor)
+                .frame(height: 2)
+                .padding(.horizontal, 8)
+                .opacity(isDropTarget && !dropAtEnd ? 1 : 0)
 
-            Text(session.title)
-                .font(.system(size: 14, weight: isSelected ? .medium : .regular))
-                .foregroundStyle(.white.opacity(isSelected ? 0.95 : 0.75))
-                .lineLimit(1)
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(session.isRunning ? Color.green : Color.gray)
+                    .frame(width: 6, height: 6)
 
-            Spacer()
+                Text(session.title)
+                    .font(.system(size: 14, weight: isSelected ? .medium : .regular))
+                    .foregroundStyle(.white.opacity(isSelected ? 0.95 : 0.75))
+                    .lineLimit(1)
 
-            if hovering || isSelected {
-                Button(action: { manager.closeSession(session) }) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.35))
-                        .frame(width: 16, height: 16)
-                        .background(
-                            Circle().fill(Color.white.opacity(hovering ? 0.1 : 0))
-                        )
+                Spacer()
+
+                if hovering || isSelected {
+                    Button(action: { manager.closeSession(session) }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.35))
+                            .frame(width: 16, height: 16)
+                            .background(
+                                Circle().fill(Color.white.opacity(hovering ? 0.1 : 0))
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .transition(.opacity)
                 }
-                .buttonStyle(.plain)
-                .transition(.opacity)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(
+                        isSelected ? Color.white.opacity(0.12) :
+                        (hovering || isTabFocused) ? Color.white.opacity(0.06) :
+                        Color.clear
+                    )
+            )
+
+            // Drop indicator line below (last tab only)
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Color.accentColor)
+                .frame(height: 2)
+                .padding(.horizontal, 8)
+                .opacity(isDropTarget && dropAtEnd ? 1 : 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(
-                    isSelected ? Color.white.opacity(0.12) :
-                    (hovering || isTabFocused) ? Color.white.opacity(0.06) :
-                    Color.clear
-                )
-        )
+        .opacity(isDragging ? 0.4 : 1)
         .contentShape(Rectangle())
+        .preventWindowDrag()
         .onHover { hovering = $0 }
         .onTapGesture {
             manager.selectedSessionID = session.id
             manager.focusedGroupIndex = nil
         }
         .onDrag {
-            NSItemProvider(object: session.id.uuidString as NSString)
+            DragState.draggedSessionID = session.id
+            return NSItemProvider(object: session.id.uuidString as NSString)
         }
-        .onDrop(of: [UTType.text], delegate: TabDropDelegate(targetSession: session, directory: directory, manager: manager))
-        .animation(.easeInOut(duration: 0.15), value: isHighlighted)
+        .onDrop(of: [UTType.text], delegate: TabDropDelegate(
+            targetSession: session,
+            directory: directory,
+            manager: manager,
+            isTargeted: $isDropTarget,
+            dropAtEnd: $dropAtEnd,
+            isLast: isLast
+        ))
+        .animation(.easeInOut(duration: 0.2), value: isDropTarget)
+        .animation(.easeInOut(duration: 0.15), value: isSelected || isTabFocused || hovering)
     }
 }
 
@@ -445,33 +474,55 @@ struct TabDropDelegate: DropDelegate {
     let targetSession: TerminalSession
     let directory: String
     let manager: TerminalManager
+    @Binding var isTargeted: Bool
+    @Binding var dropAtEnd: Bool
+    var isLast: Bool = false
 
     func dropEntered(info: DropInfo) {
-        guard let draggedID = draggedSessionID(from: info) else { return }
-        manager.moveSession(draggedID, before: targetSession.id, in: directory)
+        guard let draggedID = DragState.draggedSessionID,
+              draggedID != targetSession.id else { return }
+        isTargeted = true
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        guard let draggedID = DragState.draggedSessionID,
+              draggedID != targetSession.id else {
+            return DropProposal(operation: .move)
+        }
+
+        // On the last tab, bottom half means "after" instead of "before"
+        let atEnd = isLast && info.location.y > 20
+        if atEnd != dropAtEnd {
+            dropAtEnd = atEnd
+        }
+
+        if atEnd {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                manager.moveSessionToEndOfGroup(draggedID, in: directory)
+            }
+        } else {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                manager.moveSession(draggedID, before: targetSession.id, in: directory)
+            }
+        }
+
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        isTargeted = false
+        dropAtEnd = false
     }
 
     func validateDrop(info: DropInfo) -> Bool {
-        draggedSessionID(from: info) != nil
+        DragState.draggedSessionID != nil
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        draggedSessionID(from: info) != nil
-    }
-
-    private func draggedSessionID(from info: DropInfo) -> UUID? {
-        info.itemProviders(for: [UTType.text]).first.flatMap { provider in
-            var value: UUID?
-            let semaphore = DispatchSemaphore(value: 0)
-            provider.loadObject(ofClass: NSString.self) { object, _ in
-                if let string = object as? NSString {
-                    value = UUID(uuidString: String(string))
-                }
-                semaphore.signal()
-            }
-            _ = semaphore.wait(timeout: .now() + 0.1)
-            return value
-        }
+        isTargeted = false
+        dropAtEnd = false
+        DragState.draggedSessionID = nil
+        return true
     }
 }
 
@@ -488,30 +539,22 @@ struct GroupDropDelegate: DropDelegate {
         isTargeted = false
     }
 
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        DropProposal(operation: .move)
+    }
+
     func validateDrop(info: DropInfo) -> Bool {
-        draggedSessionID(from: info) != nil
+        DragState.draggedSessionID != nil
     }
 
     func performDrop(info: DropInfo) -> Bool {
         isTargeted = false
-        guard let draggedID = draggedSessionID(from: info) else { return false }
-        manager.moveSessionToEndOfGroup(draggedID, in: directory)
-        return true
-    }
-
-    private func draggedSessionID(from info: DropInfo) -> UUID? {
-        info.itemProviders(for: [UTType.text]).first.flatMap { provider in
-            var value: UUID?
-            let semaphore = DispatchSemaphore(value: 0)
-            provider.loadObject(ofClass: NSString.self) { object, _ in
-                if let string = object as? NSString {
-                    value = UUID(uuidString: String(string))
-                }
-                semaphore.signal()
-            }
-            _ = semaphore.wait(timeout: .now() + 0.1)
-            return value
+        guard let draggedID = DragState.draggedSessionID else { return false }
+        DragState.draggedSessionID = nil
+        withAnimation(.easeInOut(duration: 0.2)) {
+            manager.moveSessionToEndOfGroup(draggedID, in: directory)
         }
+        return true
     }
 }
 
