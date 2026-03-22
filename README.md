@@ -1,0 +1,60 @@
+# Wave Terminal
+
+> **I wrote 0 code for this.** Most of the code was written by Claude Opus 4.6 and GPT 5.4. I am not a professional in Swift, Zig, or terminal emulation. This is a proof of concept that I'm quite happy with.
+
+![Wave Terminal](assets/screenshot.png)
+
+A macOS terminal emulator built with SwiftUI, AppKit, and [libghostty](https://github.com/ghostty-org/ghostty) (the rendering engine behind Ghostty).
+
+## Features
+
+- **Glassy sidebar** with vibrancy and customizable theme (right-click to edit colors, brightness, vibrancy)
+- **Directory-based tab grouping** — terminals are automatically grouped by working directory
+- **Pinned groups** that persist across launches, with custom icons (auto-detects favicons) and names
+- **Keyboard-first navigation** — Cmd+1-9 to focus a group, arrow keys to pick a tab, Enter to select
+- **libghostty rendering** — GPU-accelerated terminal via Metal, full keyboard/mouse/IME support
+- **Shell integration** — OSC 7 directory tracking, title updates, color scheme sync
+- **Arc Browser-inspired UI** — custom traffic lights, resizable sidebar, rounded terminal surface
+
+## Prerequisites
+
+- macOS 14+
+- [Zig](https://ziglang.org/) (to build GhosttyKit)
+- Xcode 16+
+- [XcodeGen](https://github.com/yonaskolb/XcodeGen)
+
+## Build
+
+```bash
+# 1. Install dependencies
+brew install zig xcodegen
+
+# 2. Clone and build GhosttyKit
+git clone --depth 1 https://github.com/ghostty-org/ghostty.git /tmp/ghostty
+cd /tmp/ghostty
+zig build -Demit-xcframework -Dxcframework-target=native --release=fast
+
+# 3. Copy the framework
+mkdir -p Frameworks
+cp -R /tmp/ghostty/macos/GhosttyKit.xcframework Frameworks/
+
+# 4. Generate Xcode project and build
+xcodegen generate
+xcodebuild -scheme tgip -configuration Release build
+```
+
+## Shortcuts
+
+| Key | Action |
+|-----|--------|
+| Cmd+T | New tab (inherits current directory) |
+| Cmd+W | Close tab |
+| Cmd+1-9 | Focus sidebar group |
+| Arrow keys | Navigate within focused group |
+| Enter | Select tab / open terminal in empty group |
+| Escape | Cancel group focus |
+| Cmd+Q | Quit (with confirmation) |
+
+## License
+
+MIT

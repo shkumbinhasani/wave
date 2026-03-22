@@ -1,0 +1,15 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserdata
+*.xcworkspace
+xcuserdata/
+*.xcscmblueprint
+
+# OS
+.DS_Store
+*.swp
+*~
+
+# Frameworks (user must build GhosttyKit separately)
+Frameworks/GhosttyKit.xcframework/

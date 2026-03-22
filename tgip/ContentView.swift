@@ -1,0 +1,507 @@
+import SwiftUI
+
+struct ContentView: View {
+    @EnvironmentObject var manager: TerminalManager
+    @StateObject private var theme = SidebarTheme.shared
+    @FocusState private var windowFocusActive: Bool
+
+    @State private var sidebarWidth: CGFloat = 250
+    private let minSidebarWidth: CGFloat = 180
+    private let maxSidebarWidth: CGFloat = 400
+    private let outerPadding: CGFloat = 10
+
+    var body: some View {
+        ZStack {
+            VisualEffectView(material: .hudWindow, blendingMode: .behindWindow, emphasized: false)
+                .opacity(theme.vibrancy)
+                .overlay {
+                    theme.accentColor
+                        .opacity(theme.backgroundOpacity * 0.35)
+                        .blendMode(.plusLighter)
+                }
+                .overlay {
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(theme.brightness * 0.2),
+                            Color.white.opacity(theme.brightness * 0.06)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                }
+
+            ZStack(alignment: .leading) {
+                HStack(spacing: 0) {
+                    Sidebar(topInset: 46)
+                        .frame(width: sidebarWidth)
+
+                    TerminalSurface(sessionID: manager.selectedSessionID)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+
+                // Invisible resize handle overlaid on the edge
+                SidebarResizeHandle(width: $sidebarWidth, min: minSidebarWidth, max: maxSidebarWidth)
+                    .frame(width: 8)
+                    .offset(x: sidebarWidth - 4)
+            }
+            .padding(outerPadding)
+        }
+        .ignoresSafeArea()
+        .background(WindowConfigurator(outerPadding: outerPadding))
+        .frame(minWidth: 760, minHeight: 480)
+        .focusable()
+        .focusEffectDisabled()
+        .focused($windowFocusActive)
+        .onAppear {
+            if manager.selectedSessionID == nil {
+                windowFocusActive = true
+            }
+        }
+        .onReceive(manager.$selectedSessionID) { newValue in
+            if newValue == nil {
+                windowFocusActive = true
+            }
+        }
+        .onKeyPress(.upArrow) {
+            if manager.focusedGroupIndex != nil { manager.moveFocusUp(); return .handled }
+            return .ignored
+        }
+        .onKeyPress(.downArrow) {
+            if manager.focusedGroupIndex != nil { manager.moveFocusDown(); return .handled }
+            return .ignored
+        }
+        .onKeyPress(.return) {
+            if manager.focusedGroupIndex != nil {
+                manager.confirmFocus(groups: sidebarGroups)
+                return .handled
+            }
+            return .ignored
+        }
+        .onKeyPress(.escape) {
+            if manager.focusedGroupIndex != nil { manager.cancelFocus(); return .handled }
+            return .ignored
+        }
+    }
+
+    /// The same group list the sidebar uses — needed for confirmFocus.
+    var sidebarGroups: [(fullPath: String, sessions: [TerminalSession])] {
+        buildGroups(sessions: manager.sessions, pinned: manager.pinnedPaths)
+    }
+}
+
+// MARK: - Shared group builder
+
+/// Build the ordered group list: pinned groups first (always shown),
+/// then any remaining groups from live sessions.
+func buildGroups(
+    sessions: [TerminalSession],
+    pinned: [String]
+) -> [(fullPath: String, sessions: [TerminalSession])] {
+    let dict = Dictionary(grouping: sessions) { $0.workingDirectory ?? "~" }
+    var seen = Set<String>()
+    var result: [(fullPath: String, sessions: [TerminalSession])] = []
+
+    // Pinned groups first, in pinned order
+    for path in pinned {
+        seen.insert(path)
+        result.append((fullPath: path, sessions: dict[path] ?? []))
+    }
+
+    // Remaining groups sorted alphabetically
+    for key in dict.keys.sorted() where !seen.contains(key) {
+        result.append((fullPath: key, sessions: dict[key]!))
+    }
+    return result
+}
+
+// MARK: - Sidebar
+
+struct Sidebar: View {
+    @EnvironmentObject var manager: TerminalManager
+    @State private var showThemeEditor = false
+    var topInset: CGFloat = 0
+
+    private var groups: [(fullPath: String, sessions: [TerminalSession])] {
+        buildGroups(sessions: manager.sessions, pinned: manager.pinnedPaths)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Window controls row
+            HStack {
+                SidebarWindowControls()
+                Spacer()
+            }
+            .padding(.leading, 10)
+            .padding(.top, 10)
+            .padding(.bottom, 2)
+
+            // Groups
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    let labels = disambiguatedLabels(for: groups.map(\.fullPath))
+                    ForEach(Array(groups.enumerated()), id: \.element.fullPath) { groupIndex, group in
+                        let isFocused = manager.focusedGroupIndex == groupIndex
+                        DirectoryGroup(
+                            directory: labels[group.fullPath] ?? group.fullPath,
+                            fullPath: group.fullPath,
+                            sessions: group.sessions,
+                            groupIndex: groupIndex,
+                            isFocused: isFocused,
+                            focusedTabOffset: isFocused ? manager.focusedTabOffset : nil
+                        )
+
+                        if groupIndex < groups.count - 1 {
+                            Divider().opacity(0.3).padding(.horizontal, 12).padding(.vertical, 4)
+                        }
+                    }
+                }
+                .padding(.leading, 2)
+                .padding(.trailing, 10)
+                .padding(.top, 4)
+                .padding(.bottom, 8)
+            }
+
+            Divider().opacity(0.3).padding(.horizontal, 12)
+
+            // Bottom bar
+            HStack(spacing: 12) {
+                Button(action: { manager.createSession() }) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "plus")
+                            .font(.system(size: 11, weight: .medium))
+                        Text("New Tab")
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .foregroundStyle(.white.opacity(0.5))
+                }
+                .buttonStyle(.plain)
+                .onHover { h in
+                    if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                }
+
+                Spacer()
+
+                Text("\(manager.sessions.count)")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.3))
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+        }
+        .frame(maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Edit Theme...") {
+                showThemeEditor = true
+            }
+        }
+        .popover(isPresented: $showThemeEditor, arrowEdge: .trailing) {
+            ThemeEditor()
+        }
+    }
+
+    private func disambiguatedLabels(for paths: [String]) -> [String: String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        func components(_ path: String) -> [String] {
+            if path == "~" { return ["~"] }
+            var p = path
+            if p.hasPrefix(home) {
+                let rest = String(p.dropFirst(home.count))
+                p = rest.isEmpty ? "~" : "~\(rest)"
+            }
+            return p.split(separator: "/").map(String.init).reversed()
+        }
+
+        let parsed: [(path: String, comps: [String])] = paths.map { ($0, components($0)) }
+        var result: [String: String] = [:]
+        var pending = parsed
+        var depth = 1
+        while !pending.isEmpty && depth <= 20 {
+            let groups = Dictionary(grouping: pending) { entry -> String in
+                entry.comps.prefix(depth).reversed().joined(separator: "/")
+            }
+            var colliding: [(path: String, comps: [String])] = []
+            for (label, entries) in groups {
+                if entries.count == 1 { result[entries[0].path] = label }
+                else { colliding.append(contentsOf: entries) }
+            }
+            pending = colliding
+            depth += 1
+        }
+        for entry in pending {
+            result[entry.path] = entry.comps.reversed().joined(separator: "/")
+        }
+        return result
+    }
+}
+
+// MARK: - Directory Group
+
+struct DirectoryGroup: View {
+    @EnvironmentObject var manager: TerminalManager
+    let directory: String
+    let fullPath: String
+    let sessions: [TerminalSession]
+    let groupIndex: Int
+    let isFocused: Bool
+    let focusedTabOffset: Int?
+
+    private var meta: GroupMeta { manager.meta(for: fullPath) }
+    private var label: String { meta.displayName ?? directory }
+
+    private static let iconChoices = [
+        "folder", "folder.fill", "terminal", "server.rack",
+        "cloud", "hammer", "wrench.and.screwdriver", "shippingbox",
+        "cpu", "externaldrive", "globe", "lock.shield",
+        "leaf", "flame", "bolt", "star",
+        "heart", "flag", "bookmark", "tag",
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            // Group header
+            HStack(spacing: 8) {
+                GroupIcon(meta: meta, opacity: isFocused ? 0.85 : 0.55)
+
+                Text(label)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(.white.opacity(isFocused ? 0.9 : 0.65))
+                    .lineLimit(1)
+
+                Spacer()
+
+                if groupIndex < 9 {
+                    Text("\u{2318}\(groupIndex + 1)")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(isFocused ? 0.55 : 0.3))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(
+                            RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                .fill(Color.white.opacity(isFocused ? 0.12 : 0.04))
+                        )
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isFocused ? Color.white.opacity(0.08) : Color.clear)
+            )
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if sessions.isEmpty {
+                    manager.createSession(in: fullPath)
+                }
+            }
+            .contextMenu {
+                Button("New Tab Here") {
+                    manager.createSession(in: fullPath)
+                }
+                Divider()
+                // Icon picker
+                Menu("Icon") {
+                    ForEach(Self.iconChoices, id: \.self) { icon in
+                        Button {
+                            manager.setIcon(icon, for: fullPath)
+                        } label: {
+                            Label(icon, systemImage: icon)
+                        }
+                    }
+                }
+
+                Button("Choose Image...") {
+                    let panel = NSOpenPanel()
+                    panel.allowedContentTypes = [.image, .png, .jpeg, .ico]
+                    panel.canChooseDirectories = false
+                    panel.allowsMultipleSelection = false
+                    panel.message = "Choose an icon image for this group"
+                    panel.directoryURL = URL(fileURLWithPath: (fullPath as NSString).expandingTildeInPath)
+                    if panel.runModal() == .OK, let url = panel.url {
+                        manager.setImage(url.path, for: fullPath)
+                    }
+                }
+
+                if meta.imagePath != nil {
+                    Button("Remove Image") {
+                        manager.setImage(nil, for: fullPath)
+                    }
+                }
+
+                // Rename
+                Button("Rename...") {
+                    let alert = NSAlert()
+                    alert.messageText = "Rename Group"
+                    alert.informativeText = "Display name for \(directory)"
+                    let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
+                    field.stringValue = meta.displayName ?? ""
+                    field.placeholderString = directory
+                    alert.accessoryView = field
+                    alert.addButton(withTitle: "OK")
+                    alert.addButton(withTitle: "Cancel")
+                    if alert.runModal() == .alertFirstButtonReturn {
+                        manager.setDisplayName(field.stringValue, for: fullPath)
+                    }
+                }
+
+                Divider()
+
+                Button(manager.isPinned(fullPath) ? "Unpin" : "Pin") {
+                    manager.togglePin(path: fullPath)
+                }
+            }
+
+            // Tabs
+            if sessions.isEmpty {
+                EmptyView()
+            } else {
+                ForEach(Array(sessions.enumerated()), id: \.element.id) { tabIndex, session in
+                    let isTabFocused = isFocused && focusedTabOffset == tabIndex
+                    TabRow(session: session, isTabFocused: isTabFocused)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Tab Row
+
+struct TabRow: View {
+    @EnvironmentObject var manager: TerminalManager
+    @ObservedObject var session: TerminalSession
+    var isTabFocused: Bool = false
+    @State private var hovering = false
+
+    private var isSelected: Bool {
+        manager.selectedSessionID == session.id
+    }
+
+    private var isHighlighted: Bool {
+        isSelected || isTabFocused || hovering
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(session.isRunning ? Color.green : Color.gray)
+                .frame(width: 6, height: 6)
+
+            Text(session.title)
+                .font(.system(size: 14, weight: isSelected ? .medium : .regular))
+                .foregroundStyle(.white.opacity(isSelected ? 0.95 : 0.75))
+                .lineLimit(1)
+
+            Spacer()
+
+            if hovering || isSelected {
+                Button(action: { manager.closeSession(session) }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 8, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.35))
+                        .frame(width: 16, height: 16)
+                        .background(
+                            Circle().fill(Color.white.opacity(hovering ? 0.1 : 0))
+                        )
+                }
+                .buttonStyle(.plain)
+                .transition(.opacity)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(
+                    isSelected ? Color.white.opacity(0.12) :
+                    (hovering || isTabFocused) ? Color.white.opacity(0.06) :
+                    Color.clear
+                )
+        )
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .onTapGesture {
+            manager.selectedSessionID = session.id
+            manager.focusedGroupIndex = nil
+        }
+        .animation(.easeInOut(duration: 0.15), value: isHighlighted)
+    }
+}
+
+struct GroupIcon: View {
+    let meta: GroupMeta
+    var opacity: Double = 0.55
+
+    var body: some View {
+        Group {
+            if let nsImage = meta.loadImage() {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+            } else {
+                Image(systemName: meta.icon)
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white.opacity(opacity))
+            }
+        }
+        .frame(width: 20, height: 20)
+        .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+    }
+}
+
+struct TerminalSurface: View {
+    @EnvironmentObject var manager: TerminalManager
+    let sessionID: UUID?
+
+    var body: some View {
+        TerminalView(sessionID: sessionID)
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+            }
+            .shadow(color: Color.black.opacity(0.10), radius: 20, y: 10)
+    }
+}
+
+struct SidebarWindowControls: View {
+    var body: some View {
+        HStack(spacing: 8) {
+            WindowDot(color: Color(red: 1.0, green: 0.37, blue: 0.33)) {
+                NSApp.keyWindow?.performClose(nil)
+                NSApp.mainWindow?.performClose(nil)
+            }
+            WindowDot(color: Color(red: 1.0, green: 0.74, blue: 0.18)) {
+                NSApp.keyWindow?.performMiniaturize(nil)
+                NSApp.mainWindow?.performMiniaturize(nil)
+            }
+            WindowDot(color: Color(red: 0.16, green: 0.80, blue: 0.25)) {
+                if let window = NSApp.keyWindow ?? NSApp.mainWindow {
+                    window.performZoom(nil)
+                }
+            }
+        }
+    }
+}
+
+struct WindowDot: View {
+    let color: Color
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Circle()
+                .fill(color.opacity(hovering ? 0.98 : 0.9))
+                .frame(width: 12, height: 12)
+                .overlay {
+                    Circle()
+                        .strokeBorder(Color.black.opacity(0.18), lineWidth: 0.6)
+                }
+                .shadow(color: Color.black.opacity(0.18), radius: 3, y: 1)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}

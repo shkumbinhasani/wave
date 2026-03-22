@@ -1,0 +1,58 @@
+name: tgip
+options:
+  bundleIdPrefix: com.tgip
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "16.0"
+  generateEmptyDirectories: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+
+targets:
+  tgip:
+    type: application
+    platform: macOS
+    sources:
+      - path: tgip
+        excludes:
+          - "*.entitlements"
+          - "Resources/shell-integration"
+          - "Resources/terminfo"
+    resources:
+      - path: tgip/Resources/shell-integration
+        buildPhase: resources
+        type: folder
+      - path: tgip/Resources/terminfo
+        buildPhase: resources
+        type: folder
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.tgip.app
+        INFOPLIST_FILE: tgip/Info.plist
+        CODE_SIGN_ENTITLEMENTS: tgip/tgip.entitlements
+        CODE_SIGN_STYLE: Automatic
+        FRAMEWORK_SEARCH_PATHS:
+          - "$(PROJECT_DIR)/Frameworks"
+          - "$(PROJECT_DIR)"
+        SWIFT_OBJC_BRIDGING_HEADER: ""
+        LD_RUNPATH_SEARCH_PATHS:
+          - "@executable_path/../Frameworks"
+        OTHER_LDFLAGS:
+          - "-lstdc++"
+          - "-framework"
+          - "Metal"
+          - "-framework"
+          - "QuartzCore"
+          - "-framework"
+          - "Carbon"
+      debug:
+        SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+        SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG"
+      release:
+        SWIFT_OPTIMIZATION_LEVEL: "-O"
+    dependencies:
+      - framework: Frameworks/GhosttyKit.xcframework
+        embed: false

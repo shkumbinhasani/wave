@@ -1,0 +1,413 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		48B8ECBDC3DC46E7DB1DA03D /* GhosttyKit.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 1685F50773A625C4125750B4 /* GhosttyKit.xcframework */; };
+		492D2F9C7D36A04CB24D3BA3 /* SidebarTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF05957C91F554BE91086F38 /* SidebarTheme.swift */; };
+		64D38C5F0492B53CE9BA4ED5 /* TerminalManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AFB62C692098CF501E168FE /* TerminalManager.swift */; };
+		667F03A06F87B57497A070F6 /* TerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F38E414D74F5CB08054E3951 /* TerminalView.swift */; };
+		79F416B68A9E2EF9F6D395FA /* GhosttyRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = F484E650B5F3E2532FF27C50 /* GhosttyRuntime.swift */; };
+		91668C519A5B799A164EFE50 /* GroupMeta.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D54947C85BBFFB60D0C6F34 /* GroupMeta.swift */; };
+		95FC6B369CFAB35B8F9B6A2D /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B0E1FD3F474F437259AF3BF /* ContentView.swift */; };
+		A10D3E722E58E7A7D232F5C7 /* TerminalSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D86378520AEF90ED2490FD1 /* TerminalSession.swift */; };
+		B7AD7D5136E1A149B8257527 /* tgipApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E671D4648106AB63AD15E681 /* tgipApp.swift */; };
+		DF860E122DB0B4832D3D1880 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 503F0B05AD83AF1CE12AE0B0 /* AppDelegate.swift */; };
+		E19C4A6C05C40C234610F0A9 /* TerminalSurfaceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 449522E1819C5706C0A0C8B0 /* TerminalSurfaceView.swift */; };
+		E57BEB899F92C0428128D0E1 /* SidebarResizeHandle.swift in Sources */ = {isa = PBXBuildFile; fileRef = F141B476F4047EB2CF191CF1 /* SidebarResizeHandle.swift */; };
+		E662FC4AE7B49F488EACC787 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7CDE647263DB19ABD959DC53 /* Assets.xcassets */; };
+		E8B4959F4799B34D1985524A /* VisualEffectView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55D0366F3A34D43C125384C8 /* VisualEffectView.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0B0E1FD3F474F437259AF3BF /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		1685F50773A625C4125750B4 /* GhosttyKit.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = GhosttyKit.xcframework; path = Frameworks/GhosttyKit.xcframework; sourceTree = "<group>"; };
+		449522E1819C5706C0A0C8B0 /* TerminalSurfaceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSurfaceView.swift; sourceTree = "<group>"; };
+		4D86378520AEF90ED2490FD1 /* TerminalSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalSession.swift; sourceTree = "<group>"; };
+		4F56B2BC2B92D64052996BEB /* tgip.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = tgip.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		503F0B05AD83AF1CE12AE0B0 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
+		55D0366F3A34D43C125384C8 /* VisualEffectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualEffectView.swift; sourceTree = "<group>"; };
+		6AFB62C692098CF501E168FE /* TerminalManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalManager.swift; sourceTree = "<group>"; };
+		7CDE647263DB19ABD959DC53 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		9D54947C85BBFFB60D0C6F34 /* GroupMeta.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GroupMeta.swift; sourceTree = "<group>"; };
+		BF05957C91F554BE91086F38 /* SidebarTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarTheme.swift; sourceTree = "<group>"; };
+		E671D4648106AB63AD15E681 /* tgipApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = tgipApp.swift; sourceTree = "<group>"; };
+		F141B476F4047EB2CF191CF1 /* SidebarResizeHandle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SidebarResizeHandle.swift; sourceTree = "<group>"; };
+		F38E414D74F5CB08054E3951 /* TerminalView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalView.swift; sourceTree = "<group>"; };
+		F484E650B5F3E2532FF27C50 /* GhosttyRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GhosttyRuntime.swift; sourceTree = "<group>"; };
+		F85C6881B47733AC44CEDE63 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		94841AD321A582B987BE9846 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				48B8ECBDC3DC46E7DB1DA03D /* GhosttyKit.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		07DC5ACDA2B286E5EE977475 /* Terminal */ = {
+			isa = PBXGroup;
+			children = (
+				F484E650B5F3E2532FF27C50 /* GhosttyRuntime.swift */,
+				9D54947C85BBFFB60D0C6F34 /* GroupMeta.swift */,
+				6AFB62C692098CF501E168FE /* TerminalManager.swift */,
+				4D86378520AEF90ED2490FD1 /* TerminalSession.swift */,
+				449522E1819C5706C0A0C8B0 /* TerminalSurfaceView.swift */,
+				F38E414D74F5CB08054E3951 /* TerminalView.swift */,
+			);
+			path = Terminal;
+			sourceTree = "<group>";
+		};
+		0EC75E6BDC4C8BB7EF271FA3 = {
+			isa = PBXGroup;
+			children = (
+				B371B1CDC4B75EE459EB30D9 /* tgip */,
+				24068DDAFF1EE6533BD872D1 /* Frameworks */,
+				78D01822A7DD5145D75C93E5 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		24068DDAFF1EE6533BD872D1 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				1685F50773A625C4125750B4 /* GhosttyKit.xcframework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		78D01822A7DD5145D75C93E5 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				4F56B2BC2B92D64052996BEB /* tgip.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		B371B1CDC4B75EE459EB30D9 /* tgip */ = {
+			isa = PBXGroup;
+			children = (
+				503F0B05AD83AF1CE12AE0B0 /* AppDelegate.swift */,
+				7CDE647263DB19ABD959DC53 /* Assets.xcassets */,
+				0B0E1FD3F474F437259AF3BF /* ContentView.swift */,
+				F85C6881B47733AC44CEDE63 /* Info.plist */,
+				F141B476F4047EB2CF191CF1 /* SidebarResizeHandle.swift */,
+				BF05957C91F554BE91086F38 /* SidebarTheme.swift */,
+				E671D4648106AB63AD15E681 /* tgipApp.swift */,
+				55D0366F3A34D43C125384C8 /* VisualEffectView.swift */,
+				C220C19698600BDA4F622952 /* Resources */,
+				07DC5ACDA2B286E5EE977475 /* Terminal */,
+			);
+			path = tgip;
+			sourceTree = "<group>";
+		};
+		C220C19698600BDA4F622952 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		CCED94F40C35DBC96E20B760 /* tgip */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 4688A3552130041F715621BF /* Build configuration list for PBXNativeTarget "tgip" */;
+			buildPhases = (
+				456999B730557532AA82E487 /* Sources */,
+				400870EAD0285214D7941B2B /* Resources */,
+				94841AD321A582B987BE9846 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = tgip;
+			packageProductDependencies = (
+			);
+			productName = tgip;
+			productReference = 4F56B2BC2B92D64052996BEB /* tgip.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		074DC3692C7F59B04F380627 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					CCED94F40C35DBC96E20B760 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = D7BCAB4623B2C284E3443F59 /* Build configuration list for PBXProject "tgip" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 0EC75E6BDC4C8BB7EF271FA3;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				CCED94F40C35DBC96E20B760 /* tgip */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		400870EAD0285214D7941B2B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E662FC4AE7B49F488EACC787 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		456999B730557532AA82E487 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DF860E122DB0B4832D3D1880 /* AppDelegate.swift in Sources */,
+				95FC6B369CFAB35B8F9B6A2D /* ContentView.swift in Sources */,
+				79F416B68A9E2EF9F6D395FA /* GhosttyRuntime.swift in Sources */,
+				91668C519A5B799A164EFE50 /* GroupMeta.swift in Sources */,
+				E57BEB899F92C0428128D0E1 /* SidebarResizeHandle.swift in Sources */,
+				492D2F9C7D36A04CB24D3BA3 /* SidebarTheme.swift in Sources */,
+				64D38C5F0492B53CE9BA4ED5 /* TerminalManager.swift in Sources */,
+				A10D3E722E58E7A7D232F5C7 /* TerminalSession.swift in Sources */,
+				E19C4A6C05C40C234610F0A9 /* TerminalSurfaceView.swift in Sources */,
+				667F03A06F87B57497A070F6 /* TerminalView.swift in Sources */,
+				E8B4959F4799B34D1985524A /* VisualEffectView.swift in Sources */,
+				B7AD7D5136E1A149B8257527 /* tgipApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		2B2EA0175F0720026640BA0A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.10;
+			};
+			name = Debug;
+		};
+		6DEB39E384D0AE4D068D680A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = tgip/tgip.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/Frameworks",
+					"$(PROJECT_DIR)",
+					"\"Frameworks\"",
+				);
+				INFOPLIST_FILE = tgip/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/../Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"-lstdc++",
+					"-framework",
+					Metal,
+					"-framework",
+					QuartzCore,
+					"-framework",
+					Carbon,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tgip.app;
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = "";
+			};
+			name = Debug;
+		};
+		BBC800D943A33F0425B08105 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = tgip/tgip.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(PROJECT_DIR)/Frameworks",
+					"$(PROJECT_DIR)",
+					"\"Frameworks\"",
+				);
+				INFOPLIST_FILE = tgip/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"@executable_path/../Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"-lstdc++",
+					"-framework",
+					Metal,
+					"-framework",
+					QuartzCore,
+					"-framework",
+					Carbon,
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.tgip.app;
+				SDKROOT = macosx;
+				SWIFT_OBJC_BRIDGING_HEADER = "";
+			};
+			name = Release;
+		};
+		F920FDAE32E14C103F080C82 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.10;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		4688A3552130041F715621BF /* Build configuration list for PBXNativeTarget "tgip" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6DEB39E384D0AE4D068D680A /* Debug */,
+				BBC800D943A33F0425B08105 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		D7BCAB4623B2C284E3443F59 /* Build configuration list for PBXProject "tgip" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2B2EA0175F0720026640BA0A /* Debug */,
+				F920FDAE32E14C103F080C82 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 074DC3692C7F59B04F380627 /* Project object */;
+}
