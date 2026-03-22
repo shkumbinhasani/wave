@@ -271,6 +271,11 @@ class TerminalSurfaceView: NSView {
 // MARK: - NSTextInputClient
 
 extension TerminalSurfaceView: NSTextInputClient {
+    override func doCommand(by selector: Selector) {
+        // Ignore commands from interpretKeyEvents (deleteBackward:, insertNewline:, etc.)
+        // These keys are handled via ghostty_surface_key in keyDown instead.
+    }
+
     func insertText(_ string: Any, replacementRange: NSRange) {
         let text = (string as? String) ?? (string as? NSAttributedString)?.string ?? ""
         markedText = NSMutableAttributedString()

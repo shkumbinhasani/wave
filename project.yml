@@ -24,17 +24,13 @@ targets:
       - path: tgip
         excludes:
           - "*.entitlements"
-          - "Resources/shell-integration"
-          - "Resources/terminfo"
-    resources:
-      - path: tgip/Resources/ghostty.config
-        buildPhase: resources
-      - path: tgip/Resources/shell-integration
-        buildPhase: resources
-        type: folder
-      - path: tgip/Resources/terminfo
-        buildPhase: resources
-        type: folder
+          - "Resources/**"
+    preBuildScripts:
+      - name: Copy Resources
+        script: |
+          cp -R "${PROJECT_DIR}/tgip/Resources/shell-integration" "${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/"
+          cp -R "${PROJECT_DIR}/tgip/Resources/terminfo" "${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/"
+          cp "${PROJECT_DIR}/tgip/Resources/ghostty.config" "${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}/" 2>/dev/null || true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.wave.terminal
