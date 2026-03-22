@@ -1,6 +1,7 @@
 # Xcode
 build/
 DerivedData/
+.xcodebuild/
 *.xcuserdata
 *.xcworkspace
 *.xcodeproj
@@ -11,6 +12,10 @@ xcuserdata/
 .DS_Store
 *.swp
 *~
+
+# Node
+node_modules/
+package-lock.json
 
 # Frameworks (user must build GhosttyKit separately)
 Frameworks/GhosttyKit.xcframework/
