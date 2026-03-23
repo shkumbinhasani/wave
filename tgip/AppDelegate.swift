@@ -1,18 +1,8 @@
 import AppKit
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    private var windowObservers: [NSObjectProtocol] = []
-
     func applicationDidFinishLaunching(_ notification: Notification) {
-        installWindowChromeObservers()
-        reconfigureAllWindows()
         moveToApplicationsIfNeeded()
-    }
-
-    deinit {
-        for observer in windowObservers {
-            NotificationCenter.default.removeObserver(observer)
-        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -58,42 +48,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             UserDefaults.standard.set(true, forKey: "declinedMoveToApplications")
         default:
             break
-        }
-    }
-
-    private func installWindowChromeObservers() {
-        let notifications: [Notification.Name] = [
-            NSWindow.didBecomeKeyNotification,
-            NSWindow.didBecomeMainNotification,
-            NSWindow.didExposeNotification,
-            NSWindow.didResizeNotification
-        ]
-
-        for name in notifications {
-            let observer = NotificationCenter.default.addObserver(
-                forName: name,
-                object: nil,
-                queue: .main
-            ) { notification in
-                guard let window = notification.object as? NSWindow else { return }
-                self.reconfigure(window: window)
-            }
-            windowObservers.append(observer)
-        }
-    }
-
-    private func reconfigureAllWindows() {
-        for delay in [0.0, 0.05, 0.2, 0.5] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                NSApp.windows.forEach { self.reconfigure(window: $0) }
-            }
-        }
-    }
-
-    private func reconfigure(window: NSWindow) {
-        configureWaveWindowChrome(window)
-        DispatchQueue.main.async {
-            configureWaveWindowChrome(window)
         }
     }
 

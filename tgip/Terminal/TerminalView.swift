@@ -16,17 +16,19 @@ struct TerminalView: NSViewRepresentable {
     }
 
     func updateNSView(_ container: NSView, context: Context) {
+        // Find the session's surface view
         guard let sessionID,
-              let session = manager.session(for: sessionID),
+              let session = manager.sessions.first(where: { $0.id == sessionID }),
               let surfaceView = session.surfaceView else {
-            if !container.subviews.isEmpty {
-                for sub in container.subviews { sub.removeFromSuperview() }
-            }
+            // No session selected — clear container
+            for sub in container.subviews { sub.removeFromSuperview() }
             return
         }
 
+        // Already showing the right view — nothing to do
         if container.subviews.first === surfaceView { return }
 
+        // Swap: remove old, add new
         for sub in container.subviews { sub.removeFromSuperview() }
         surfaceView.frame = container.bounds
         surfaceView.autoresizingMask = [.width, .height]

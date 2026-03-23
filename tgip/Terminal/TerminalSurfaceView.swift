@@ -36,12 +36,12 @@ class TerminalSurfaceView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        updateAttachmentState()
-    }
-
-    override func viewDidMoveToSuperview() {
-        super.viewDidMoveToSuperview()
-        updateAttachmentState()
+        guard let window else { stopDisplayLink(); return }
+        if surface == nil { runtime?.createSurface(for: self) }
+        let s = window.backingScaleFactor
+        surface.map { ghostty_surface_set_content_scale($0, Double(s), Double(s)) }
+        setupDisplayLink()
+        refreshTrackingArea()
     }
 
     override func layout() {
@@ -71,29 +71,6 @@ class TerminalSurfaceView: NSView {
 
     deinit { destroySurface() }
 
-    private func updateAttachmentState() {
-        guard let window, superview != nil else {
-            if let surface {
-                ghostty_surface_set_occlusion(surface, true)
-            }
-            stopDisplayLink()
-            refreshTrackingArea()
-            return
-        }
-
-        if surface == nil {
-            runtime?.createSurface(for: self)
-        }
-
-        let scale = window.backingScaleFactor
-        surface.map {
-            ghostty_surface_set_occlusion($0, false)
-            ghostty_surface_set_content_scale($0, Double(scale), Double(scale))
-        }
-        setupDisplayLink()
-        refreshTrackingArea()
-    }
-
     // MARK: - Display Link
 
     private func setupDisplayLink() {
@@ -117,9 +94,7 @@ class TerminalSurfaceView: NSView {
     }
 
     private func stopDisplayLink() {
-        if let displayLink {
-            CVDisplayLinkStop(displayLink)
-        }
+        displayLink.map { CVDisplayLinkStop($0) }
         displayLink = nil
     }
 

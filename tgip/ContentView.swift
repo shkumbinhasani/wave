@@ -96,7 +96,7 @@ struct ContentView: View {
             }
         }
         .ignoresSafeArea()
-        .background(WindowConfigurator())
+        .background(WindowConfigurator(outerPadding: outerPadding))
         .frame(minWidth: 760, minHeight: 480)
         .focusable()
         .focusEffectDisabled()
@@ -121,7 +121,7 @@ struct ContentView: View {
         }
         .onKeyPress(.return) {
             if manager.focusedGroupIndex != nil {
-                manager.confirmFocus()
+                manager.confirmFocus(groups: sidebarGroups)
                 return .handled
             }
             return .ignored
@@ -132,6 +132,35 @@ struct ContentView: View {
         }
     }
 
+    /// The same group list the sidebar uses — needed for confirmFocus.
+    var sidebarGroups: [(fullPath: String, sessions: [TerminalSession])] {
+        buildGroups(sessions: manager.sessions, pinned: manager.pinnedPaths)
+    }
+}
+
+// MARK: - Shared group builder
+
+/// Build the ordered group list: pinned groups first (always shown),
+/// then any remaining groups from live sessions.
+func buildGroups(
+    sessions: [TerminalSession],
+    pinned: [String]
+) -> [(fullPath: String, sessions: [TerminalSession])] {
+    let dict = Dictionary(grouping: sessions) { $0.workingDirectory ?? "~" }
+    var seen = Set<String>()
+    var result: [(fullPath: String, sessions: [TerminalSession])] = []
+
+    // Pinned groups first, in pinned order
+    for path in pinned {
+        seen.insert(path)
+        result.append((fullPath: path, sessions: dict[path] ?? []))
+    }
+
+    // Remaining groups sorted alphabetically
+    for key in dict.keys.sorted() where !seen.contains(key) {
+        result.append((fullPath: key, sessions: dict[key]!))
+    }
+    return result
 }
 
 // MARK: - Sidebar
@@ -147,8 +176,8 @@ struct Sidebar: View {
         self._sidebarPinned = sidebarPinned
     }
 
-    private var groups: [SidebarGroup] {
-        manager.sidebarGroups
+    private var groups: [(fullPath: String, sessions: [TerminalSession])] {
+        buildGroups(sessions: manager.sessions, pinned: manager.pinnedPaths)
     }
 
     var body: some View {
@@ -179,7 +208,7 @@ struct Sidebar: View {
             // Groups
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
-                    let labels = manager.sidebarLabels
+                    let labels = disambiguatedLabels(for: groups.map(\.fullPath))
                     ForEach(Array(groups.enumerated()), id: \.element.fullPath) { groupIndex, group in
                         let isFocused = manager.focusedGroupIndex == groupIndex
                         DirectoryGroup(
@@ -239,6 +268,40 @@ struct Sidebar: View {
         .popover(isPresented: $showThemeEditor, arrowEdge: .trailing) {
             ThemeEditor()
         }
+    }
+
+    private func disambiguatedLabels(for paths: [String]) -> [String: String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        func components(_ path: String) -> [String] {
+            if path == "~" { return ["~"] }
+            var p = path
+            if p.hasPrefix(home) {
+                let rest = String(p.dropFirst(home.count))
+                p = rest.isEmpty ? "~" : "~\(rest)"
+            }
+            return p.split(separator: "/").map(String.init).reversed()
+        }
+
+        let parsed: [(path: String, comps: [String])] = paths.map { ($0, components($0)) }
+        var result: [String: String] = [:]
+        var pending = parsed
+        var depth = 1
+        while !pending.isEmpty && depth <= 20 {
+            let groups = Dictionary(grouping: pending) { entry -> String in
+                entry.comps.prefix(depth).reversed().joined(separator: "/")
+            }
+            var colliding: [(path: String, comps: [String])] = []
+            for (label, entries) in groups {
+                if entries.count == 1 { result[entries[0].path] = label }
+                else { colliding.append(contentsOf: entries) }
+            }
+            pending = colliding
+            depth += 1
+        }
+        for entry in pending {
+            result[entry.path] = entry.comps.reversed().joined(separator: "/")
+        }
+        return result
     }
 }
 
@@ -374,24 +437,9 @@ struct DirectoryGroup: View {
 
 // MARK: - Tab Row
 
+// Shared drag state — avoids async NSItemProvider round-trips
 enum DragState {
-    enum Destination: Equatable {
-        case before(UUID)
-        case endOfGroup(String)
-    }
-
     static var draggedSessionID: UUID?
-    static var lastDestination: Destination?
-
-    static func beginDrag(sessionID: UUID) {
-        draggedSessionID = sessionID
-        lastDestination = nil
-    }
-
-    static func reset() {
-        draggedSessionID = nil
-        lastDestination = nil
-    }
 }
 
 struct TabRow: View {
@@ -474,7 +522,7 @@ struct TabRow: View {
             manager.focusedGroupIndex = nil
         }
         .onDrag {
-            DragState.beginDrag(sessionID: session.id)
+            DragState.draggedSessionID = session.id
             return NSItemProvider(object: session.id.uuidString as NSString)
         }
         .onDrop(of: [UTType.text], delegate: TabDropDelegate(
@@ -516,22 +564,12 @@ struct TabDropDelegate: DropDelegate {
             dropAtEnd = atEnd
         }
 
-        let destination: DragState.Destination = atEnd
-            ? .endOfGroup(directory)
-            : .before(targetSession.id)
-
-        guard destination != DragState.lastDestination else {
-            return DropProposal(operation: .move)
-        }
-
-        DragState.lastDestination = destination
-
         if atEnd {
-            _ = withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(.easeInOut(duration: 0.2)) {
                 manager.moveSessionToEndOfGroup(draggedID, in: directory)
             }
         } else {
-            _ = withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(.easeInOut(duration: 0.2)) {
                 manager.moveSession(draggedID, before: targetSession.id, in: directory)
             }
         }
@@ -542,7 +580,6 @@ struct TabDropDelegate: DropDelegate {
     func dropExited(info: DropInfo) {
         isTargeted = false
         dropAtEnd = false
-        DragState.lastDestination = nil
     }
 
     func validateDrop(info: DropInfo) -> Bool {
@@ -552,7 +589,7 @@ struct TabDropDelegate: DropDelegate {
     func performDrop(info: DropInfo) -> Bool {
         isTargeted = false
         dropAtEnd = false
-        DragState.reset()
+        DragState.draggedSessionID = nil
         return true
     }
 }
@@ -568,7 +605,6 @@ struct GroupDropDelegate: DropDelegate {
 
     func dropExited(info: DropInfo) {
         isTargeted = false
-        DragState.lastDestination = nil
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
@@ -582,9 +618,8 @@ struct GroupDropDelegate: DropDelegate {
     func performDrop(info: DropInfo) -> Bool {
         isTargeted = false
         guard let draggedID = DragState.draggedSessionID else { return false }
-        defer { DragState.reset() }
-
-        _ = withAnimation(.easeInOut(duration: 0.2)) {
+        DragState.draggedSessionID = nil
+        withAnimation(.easeInOut(duration: 0.2)) {
             manager.moveSessionToEndOfGroup(draggedID, in: directory)
         }
         return true
@@ -638,9 +673,6 @@ struct SidebarWindowControls: View {
                 performWindowAction { window in
                     window.styleMask.insert(.miniaturizable)
 
-                    // Drive the hidden native minimize button first.
-                    // With our custom title bar setup, direct minimize calls alone are
-                    // not reliable, so keep this weird fallback chain intact.
                     if let button = window.standardWindowButton(.miniaturizeButton), button.isEnabled {
                         button.performClick(nil)
 
@@ -653,7 +685,7 @@ struct SidebarWindowControls: View {
                 }
             }
             WindowDot(color: Color(red: 0.16, green: 0.80, blue: 0.25)) {
-                performWindowAction(performNativeFullscreen)
+                performWindowAction { $0.zoom(nil) }
             }
         }
         .preventWindowDrag()
@@ -665,10 +697,6 @@ struct SidebarWindowControls: View {
         }
 
         action(window)
-    }
-
-    private func performNativeFullscreen(_ window: NSWindow) {
-        window.toggleFullScreen(nil)
     }
 }
 
