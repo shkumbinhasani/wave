@@ -599,19 +599,36 @@ struct SidebarWindowControls: View {
     var body: some View {
         HStack(spacing: 8) {
             WindowDot(color: Color(red: 1.0, green: 0.37, blue: 0.33)) {
-                NSApp.keyWindow?.performClose(nil)
-                NSApp.mainWindow?.performClose(nil)
+                performWindowAction { $0.close() }
             }
             WindowDot(color: Color(red: 1.0, green: 0.74, blue: 0.18)) {
-                NSApp.keyWindow?.performMiniaturize(nil)
-                NSApp.mainWindow?.performMiniaturize(nil)
-            }
-            WindowDot(color: Color(red: 0.16, green: 0.80, blue: 0.25)) {
-                if let window = NSApp.keyWindow ?? NSApp.mainWindow {
-                    window.performZoom(nil)
+                performWindowAction { window in
+                    window.styleMask.insert(.miniaturizable)
+
+                    if let button = window.standardWindowButton(.miniaturizeButton), button.isEnabled {
+                        button.performClick(nil)
+
+                        if !window.isMiniaturized {
+                            window.performMiniaturize(button)
+                        }
+                    } else {
+                        window.performMiniaturize(nil)
+                    }
                 }
             }
+            WindowDot(color: Color(red: 0.16, green: 0.80, blue: 0.25)) {
+                performWindowAction { $0.zoom(nil) }
+            }
         }
+        .preventWindowDrag()
+    }
+
+    private func performWindowAction(_ action: (NSWindow) -> Void) {
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first(where: { $0.isVisible }) else {
+            return
+        }
+
+        action(window)
     }
 }
 
@@ -631,7 +648,9 @@ struct WindowDot: View {
                 }
                 .shadow(color: Color.black.opacity(0.18), radius: 3, y: 1)
         }
+        .contentShape(Rectangle())
         .buttonStyle(.plain)
+        .preventWindowDrag()
         .onHover { hovering = $0 }
     }
 }

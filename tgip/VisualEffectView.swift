@@ -50,13 +50,13 @@ struct WindowConfigurator: NSViewRepresentable {
         window.backgroundColor = .clear
         window.hasShadow = true
         window.isMovableByWindowBackground = true
-        window.styleMask.insert(.fullSizeContentView)
+        window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView])
 
         let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
         buttons.compactMap { window.standardWindowButton($0) }.forEach {
-            $0.isHidden = true
-            $0.alphaValue = 0
-            $0.isEnabled = false
+            $0.isHidden = false
+            $0.alphaValue = 0.001
+            $0.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
         }
     }
 }
