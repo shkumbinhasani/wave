@@ -202,12 +202,6 @@ struct Sidebar: View {
             .padding(.leading, 10)
             .padding(.top, 10)
             .padding(.bottom, 2)
-            .contentShape(Rectangle())
-            .contextMenu {
-                Button("Edit Theme...") {
-                    showThemeEditor = true
-                }
-            }
 
             // Groups
             ScrollView {
@@ -263,6 +257,12 @@ struct Sidebar: View {
             .padding(.vertical, 10)
         }
         .frame(maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Edit Theme...") {
+                showThemeEditor = true
+            }
+        }
         .popover(isPresented: $showThemeEditor, arrowEdge: .trailing) {
             ThemeEditor()
         }

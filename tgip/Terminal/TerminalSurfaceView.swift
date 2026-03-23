@@ -228,22 +228,78 @@ class TerminalSurfaceView: NSView {
     override func mouseDown(with e: NSEvent) {
         window?.makeFirstResponder(self)
         guard let surface else { return }
+        reportMouse(e)
         _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_LEFT, ghosttyMods(e.modifierFlags))
     }
     override func mouseUp(with e: NSEvent) {
         guard let surface else { return }
+        reportMouse(e)
         _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_LEFT, ghosttyMods(e.modifierFlags))
     }
     override func rightMouseDown(with e: NSEvent) {
+        window?.makeFirstResponder(self)
         guard let surface else { super.rightMouseDown(with: e); return }
-        _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, ghosttyMods(e.modifierFlags))
+        reportMouse(e)
+        if ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, ghosttyMods(e.modifierFlags)) {
+            return
+        }
+        super.rightMouseDown(with: e)
     }
     override func rightMouseUp(with e: NSEvent) {
-        guard let surface else { return }
-        _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT, ghosttyMods(e.modifierFlags))
+        guard let surface else { super.rightMouseUp(with: e); return }
+        reportMouse(e)
+        if ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_RELEASE, GHOSTTY_MOUSE_RIGHT, ghosttyMods(e.modifierFlags)) {
+            return
+        }
+        super.rightMouseUp(with: e)
     }
     override func mouseMoved(with e: NSEvent)   { reportMouse(e) }
     override func mouseDragged(with e: NSEvent) { reportMouse(e) }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        switch event.type {
+        case .rightMouseDown:
+            break
+        case .leftMouseDown:
+            guard event.modifierFlags.contains(.control), let surface else { return nil }
+            if ghostty_surface_mouse_captured(surface) {
+                return nil
+            }
+            window?.makeFirstResponder(self)
+            reportMouse(event)
+            _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, ghosttyMods(event.modifierFlags))
+        default:
+            return nil
+        }
+
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        let copyItem = menu.addItem(withTitle: "Copy", action: #selector(copy(_:)), keyEquivalent: "")
+        copyItem.isEnabled = surface.map { ghostty_surface_has_selection($0) } ?? false
+
+        let pasteItem = menu.addItem(withTitle: "Paste", action: #selector(paste(_:)), keyEquivalent: "")
+        pasteItem.isEnabled = surface != nil
+
+        menu.addItem(.separator())
+
+        let selectAllItem = menu.addItem(withTitle: "Select All", action: #selector(selectAll(_:)), keyEquivalent: "")
+        selectAllItem.isEnabled = surface != nil
+
+        return menu
+    }
+
+    @IBAction func copy(_ sender: Any?) {
+        performBindingAction("copy_to_clipboard")
+    }
+
+    @IBAction func paste(_ sender: Any?) {
+        performBindingAction("paste_from_clipboard")
+    }
+
+    @IBAction override func selectAll(_ sender: Any?) {
+        performBindingAction("select_all")
+    }
 
     private func reportMouse(_ e: NSEvent) {
         guard let surface else { return }
@@ -255,6 +311,13 @@ class TerminalSurfaceView: NSView {
         guard let surface else { return }
         let sm: ghostty_input_scroll_mods_t = e.hasPreciseScrollingDeltas ? 1 : 0
         ghostty_surface_mouse_scroll(surface, e.scrollingDeltaX, e.scrollingDeltaY, sm)
+    }
+
+    private func performBindingAction(_ action: String) {
+        guard let surface else { return }
+        action.withCString { ptr in
+            _ = ghostty_surface_binding_action(surface, ptr, UInt(action.utf8.count))
+        }
     }
 
     // MARK: - Tracking Area
