@@ -14,23 +14,25 @@ struct ContentView: View {
 
     var body: some View {
         ZStack {
-            VisualEffectView(material: .hudWindow, blendingMode: .behindWindow, emphasized: false)
-                .opacity(theme.vibrancy)
-                .overlay {
-                    theme.accentColor
-                        .opacity(theme.backgroundOpacity * 0.35)
-                        .blendMode(.plusLighter)
-                }
-                .overlay {
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(theme.brightness * 0.2),
-                            Color.white.opacity(theme.brightness * 0.06)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                }
+            ZStack {
+                // Blur layer — always present, controlled by blur slider
+                VisualEffectView(material: .hudWindow, blendingMode: .behindWindow, emphasized: false)
+                    .opacity(theme.vibrancy)
+
+                // Solid accent fill on top — tint slider controls how much it covers the blur
+                theme.accentColor
+                    .opacity(theme.backgroundOpacity)
+
+                // Brightness overlay
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(theme.brightness * 0.2),
+                        Color.white.opacity(theme.brightness * 0.06)
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
 
             ZStack(alignment: .leading) {
                 // Terminal always fills the space

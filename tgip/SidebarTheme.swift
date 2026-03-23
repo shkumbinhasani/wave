@@ -83,28 +83,6 @@ struct ThemeEditor: View {
             }
             .padding(.bottom, 14)
 
-            // Intensity +/-
-            HStack(spacing: 20) {
-                Button {
-                    theme.backgroundOpacity = max(0, theme.backgroundOpacity - 0.05)
-                } label: {
-                    Image(systemName: "minus")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-
-                Button {
-                    theme.backgroundOpacity = min(1, theme.backgroundOpacity + 0.05)
-                } label: {
-                    Image(systemName: "plus")
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-            }
-            .padding(.bottom, 18)
-
             // Color dots
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
@@ -132,44 +110,65 @@ struct ThemeEditor: View {
             }
             .padding(.bottom, 16)
 
-            // Vibrancy knob
-            HStack(spacing: 14) {
-                Image(systemName: "drop")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+            // Tint slider — 0% = fully transparent glass, 100% = flat solid color
+            themeSlider(
+                label: "Tint",
+                icon1: "circle.dashed",
+                icon2: "circle.fill",
+                value: $theme.backgroundOpacity
+            )
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
 
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(Color.white.opacity(0.08))
-                            .frame(height: 4)
-                        Capsule()
-                            .fill(Color.white.opacity(0.3))
-                            .frame(width: geo.size.width * theme.vibrancy, height: 4)
-                        Circle()
-                            .fill(Color.white)
-                            .frame(width: 14, height: 14)
-                            .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
-                            .offset(x: (geo.size.width - 14) * theme.vibrancy)
-                            .gesture(
-                                DragGesture(minimumDistance: 0)
-                                    .onChanged { v in
-                                        theme.vibrancy = min(1, max(0, v.location.x / geo.size.width))
-                                    }
-                            )
-                    }
-                }
-                .frame(height: 14)
-
-                Image(systemName: "drop.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
+            // Blur slider — 0% = no blur, 100% = max blur
+            themeSlider(
+                label: "Blur",
+                icon1: "aqi.low",
+                icon2: "aqi.high",
+                value: $theme.vibrancy
+            )
             .padding(.horizontal, 16)
             .padding(.bottom, 20)
         }
         .frame(width: 260)
         .background(.ultraThinMaterial)
+    }
+
+    private func themeSlider(label: String, icon1: String, icon2: String, value: Binding<Double>) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon1)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.08))
+                        .frame(height: 4)
+                    Capsule()
+                        .fill(Color.white.opacity(0.3))
+                        .frame(width: geo.size.width * value.wrappedValue, height: 4)
+                    Circle()
+                        .fill(Color.white)
+                        .frame(width: 14, height: 14)
+                        .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
+                        .offset(x: (geo.size.width - 14) * value.wrappedValue)
+                        .gesture(
+                            DragGesture(minimumDistance: 0)
+                                .onChanged { v in
+                                    value.wrappedValue = min(1, max(0, v.location.x / geo.size.width))
+                                }
+                        )
+                }
+            }
+            .frame(height: 14)
+
+            Image(systemName: icon2)
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .frame(width: 14)
+        }
     }
 
     private func modeButton(_ icon: String, val: Double) -> some View {
