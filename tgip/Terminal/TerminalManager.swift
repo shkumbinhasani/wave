@@ -2,14 +2,98 @@ import SwiftUI
 import Combine
 import GhosttyKit
 
+struct SidebarGroup: Identifiable {
+    let fullPath: String
+    let sessions: [TerminalSession]
+
+    var id: String { fullPath }
+}
+
+func buildSidebarGroups(
+    sessions: [TerminalSession],
+    pinned: [String]
+) -> [SidebarGroup] {
+    let groupedSessions = Dictionary(grouping: sessions) { $0.workingDirectory ?? "~" }
+    var seen = Set<String>()
+    var result: [SidebarGroup] = []
+
+    for path in pinned {
+        seen.insert(path)
+        result.append(SidebarGroup(fullPath: path, sessions: groupedSessions[path] ?? []))
+    }
+
+    for path in groupedSessions.keys.sorted() where !seen.contains(path) {
+        result.append(SidebarGroup(fullPath: path, sessions: groupedSessions[path] ?? []))
+    }
+
+    return result
+}
+
+func disambiguatedSidebarLabels(for paths: [String]) -> [String: String] {
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
+
+    func components(for path: String) -> [String] {
+        if path == "~" { return ["~"] }
+
+        var normalizedPath = path
+        if normalizedPath.hasPrefix(home) {
+            let remainder = String(normalizedPath.dropFirst(home.count))
+            normalizedPath = remainder.isEmpty ? "~" : "~\(remainder)"
+        }
+
+        return normalizedPath.split(separator: "/").map(String.init).reversed()
+    }
+
+    let parsedPaths = paths.map { (path: $0, components: components(for: $0)) }
+    var result: [String: String] = [:]
+    var pending = parsedPaths
+    var depth = 1
+
+    while !pending.isEmpty && depth <= 20 {
+        let grouped = Dictionary(grouping: pending) { entry -> String in
+            entry.components.prefix(depth).reversed().joined(separator: "/")
+        }
+        var collisions: [(path: String, components: [String])] = []
+
+        for (label, entries) in grouped {
+            if entries.count == 1 {
+                result[entries[0].path] = label
+            } else {
+                collisions.append(contentsOf: entries)
+            }
+        }
+
+        pending = collisions
+        depth += 1
+    }
+
+    for entry in pending {
+        result[entry.path] = entry.components.reversed().joined(separator: "/")
+    }
+
+    return result
+}
+
 class TerminalManager: ObservableObject {
     private var themeCancellable: AnyCancellable?
-    @Published var sessions: [TerminalSession] = []
+    private var sessionsByID: [UUID: TerminalSession] = [:]
+
+    @Published var sessions: [TerminalSession] = [] {
+        didSet {
+            rebuildSessionIndex()
+            rebuildSidebarModel()
+        }
+    }
     @Published var selectedSessionID: UUID?
+    @Published private(set) var sidebarGroups: [SidebarGroup] = []
+    @Published private(set) var sidebarLabels: [String: String] = [:]
 
     /// Pinned directory paths — always shown in sidebar, persisted across launches.
     @Published var pinnedPaths: [String] {
-        didSet { UserDefaults.standard.set(pinnedPaths, forKey: "pinnedPaths") }
+        didSet {
+            UserDefaults.standard.set(pinnedPaths, forKey: "pinnedPaths")
+            rebuildSidebarModel()
+        }
     }
 
     /// Per-group metadata (icon, display name). Keyed by absolute path.
@@ -27,7 +111,8 @@ class TerminalManager: ObservableObject {
     let ghostty: GhosttyRuntime
 
     var selectedSession: TerminalSession? {
-        sessions.first { $0.id == selectedSessionID }
+        guard let selectedSessionID else { return nil }
+        return sessionsByID[selectedSessionID]
     }
 
     init() {
@@ -47,6 +132,8 @@ class TerminalManager: ObservableObject {
                 self?.ghostty.setColorScheme(dark: val < 0.5)
             }
 
+        rebuildSessionIndex()
+        rebuildSidebarModel()
         createSession()
     }
 
@@ -71,25 +158,32 @@ class TerminalManager: ObservableObject {
         }
     }
 
-    func moveSession(_ draggedID: UUID, before targetID: UUID, in directory: String) {
+    func moveSession(_ draggedID: UUID, before targetID: UUID, in directory: String) -> Bool {
         guard draggedID != targetID,
               let draggedIndex = sessions.firstIndex(where: { $0.id == draggedID }),
               let targetIndex = sessions.firstIndex(where: { $0.id == targetID }),
               sessions[draggedIndex].workingDirectory == directory,
-              sessions[targetIndex].workingDirectory == directory else { return }
+              sessions[targetIndex].workingDirectory == directory else { return false }
+
+        let adjustedTarget = draggedIndex < targetIndex ? targetIndex - 1 : targetIndex
+        guard adjustedTarget != draggedIndex else { return false }
 
         let dragged = sessions.remove(at: draggedIndex)
-        let adjustedTarget = draggedIndex < targetIndex ? targetIndex - 1 : targetIndex
         sessions.insert(dragged, at: adjustedTarget)
+        return true
     }
 
-    func moveSessionToEndOfGroup(_ draggedID: UUID, in directory: String) {
+    func moveSessionToEndOfGroup(_ draggedID: UUID, in directory: String) -> Bool {
         guard let draggedIndex = sessions.firstIndex(where: { $0.id == draggedID }),
-              sessions[draggedIndex].workingDirectory == directory else { return }
+              sessions[draggedIndex].workingDirectory == directory,
+              let lastGroupIndex = sessions.lastIndex(where: { $0.workingDirectory == directory }) else { return false }
+
+        guard draggedIndex != lastGroupIndex else { return false }
 
         let dragged = sessions.remove(at: draggedIndex)
         let insertionIndex = sessions.lastIndex(where: { $0.workingDirectory == directory }).map { $0 + 1 } ?? sessions.count
         sessions.insert(dragged, at: insertionIndex)
+        return true
     }
 
     // MARK: - Pinning
@@ -129,7 +223,10 @@ class TerminalManager: ObservableObject {
 
     func setImage(_ imagePath: String?, for path: String) {
         var m = meta(for: path)
+        let previousImagePath = m.imagePath
         m.imagePath = imagePath
+        GroupMeta.invalidateImageCache(for: previousImagePath)
+        GroupMeta.invalidateImageCache(for: imagePath)
         groupMeta[path] = m
     }
 
@@ -150,24 +247,25 @@ class TerminalManager: ObservableObject {
     // MARK: - Group Navigation
 
     func focusGroup(at index: Int) {
+        guard sidebarGroups.indices.contains(index) else { return }
         focusedGroupIndex = index
         focusedTabOffset = 0
     }
 
     func moveFocusDown() {
-        focusedTabOffset += 1
+        guard let focusedGroupIndex, sidebarGroups.indices.contains(focusedGroupIndex) else { return }
+        let maxOffset = max(sidebarGroups[focusedGroupIndex].sessions.count - 1, 0)
+        focusedTabOffset = min(focusedTabOffset + 1, maxOffset)
     }
 
     func moveFocusUp() {
         focusedTabOffset = max(0, focusedTabOffset - 1)
     }
 
-    /// Select the currently focused tab, or the first tab in the focused group.
-    func confirmFocus(groups: [(fullPath: String, sessions: [TerminalSession])]) {
-        guard let gi = focusedGroupIndex, gi < groups.count else { return }
-        let group = groups[gi]
+    func confirmFocus() {
+        guard let activeGroupIndex = focusedGroupIndex, sidebarGroups.indices.contains(activeGroupIndex) else { return }
+        let group = sidebarGroups[activeGroupIndex]
         if group.sessions.isEmpty {
-            // Pinned group with no tabs — create one there
             let session = TerminalSession(title: "Terminal \(sessions.count + 1)")
             session.workingDirectory = group.fullPath
             let view = TerminalSurfaceView(runtime: ghostty, session: session, workingDirectory: group.fullPath)
@@ -188,7 +286,39 @@ class TerminalManager: ObservableObject {
     // MARK: - Lookup
 
     private func findSession(for ptr: ghostty_surface_t) -> TerminalSession? {
-        sessions.first { $0.surfaceView?.surface == ptr }
+        guard let userdata = ghostty_surface_userdata(ptr) else { return nil }
+        let view = Unmanaged<TerminalSurfaceView>.fromOpaque(userdata).takeUnretainedValue()
+        return view.session
+    }
+
+    func session(for id: UUID) -> TerminalSession? {
+        sessionsByID[id]
+    }
+
+    private func rebuildSessionIndex() {
+        sessionsByID = Dictionary(uniqueKeysWithValues: sessions.map { ($0.id, $0) })
+    }
+
+    private func rebuildSidebarModel() {
+        let groups = buildSidebarGroups(sessions: sessions, pinned: pinnedPaths)
+        sidebarGroups = groups
+        sidebarLabels = disambiguatedSidebarLabels(for: groups.map(\.fullPath))
+
+        guard let focusedGroupIndex else { return }
+
+        if groups.isEmpty {
+            self.focusedGroupIndex = nil
+            focusedTabOffset = 0
+            return
+        }
+
+        if focusedGroupIndex >= groups.count {
+            self.focusedGroupIndex = groups.count - 1
+        }
+
+        let activeIndex = self.focusedGroupIndex ?? 0
+        let maxOffset = max(groups[activeIndex].sessions.count - 1, 0)
+        focusedTabOffset = min(focusedTabOffset, maxOffset)
     }
 
     // MARK: - Actions
@@ -204,10 +334,8 @@ class TerminalManager: ObservableObject {
         case GHOSTTY_ACTION_SET_TITLE:
             guard let surfacePtr, let session = findSession(for: surfacePtr) else { return true }
             let title = String(cString: action.action.set_title.title)
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
+            DispatchQueue.main.async {
                 session.title = title
-                self.sessions = self.sessions
             }
             return true
 
@@ -216,8 +344,9 @@ class TerminalManager: ObservableObject {
             let pwd = String(cString: action.action.pwd.pwd)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                guard session.workingDirectory != pwd else { return }
                 session.workingDirectory = pwd
-                self.sessions = self.sessions
+                self.rebuildSidebarModel()
             }
             return true
 

@@ -4,6 +4,9 @@ import GhosttyKit
 class GhosttyRuntime {
     private(set) var app: ghostty_app_t?
     private var config: ghostty_config_t?
+    private let tickStateQueue = DispatchQueue(label: "wave.ghostty.tick")
+    private var tickScheduled = false
+    private var tickPending = false
 
     var onAction: ((_ target: ghostty_target_s, _ action: ghostty_action_s) -> Bool)?
 
@@ -34,7 +37,7 @@ class GhosttyRuntime {
         rt.wakeup_cb = { ud in
             guard let ud else { return }
             let runtime = Unmanaged<GhosttyRuntime>.fromOpaque(ud).takeUnretainedValue()
-            DispatchQueue.main.async { runtime.tick() }
+            runtime.scheduleTick()
         }
 
         rt.action_cb = { appPtr, target, action in
@@ -99,6 +102,36 @@ class GhosttyRuntime {
     deinit {
         if let app { ghostty_app_free(app) }
         if let config { ghostty_config_free(config) }
+    }
+
+    private func scheduleTick() {
+        let shouldSchedule = tickStateQueue.sync { () -> Bool in
+            tickPending = true
+            guard !tickScheduled else { return false }
+            tickScheduled = true
+            return true
+        }
+
+        guard shouldSchedule else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.drainPendingTicks()
+        }
+    }
+
+    private func drainPendingTicks() {
+        while true {
+            let hasWork = tickStateQueue.sync { () -> Bool in
+                guard tickPending else {
+                    tickScheduled = false
+                    return false
+                }
+                tickPending = false
+                return true
+            }
+
+            guard hasWork else { return }
+            tick()
+        }
     }
 
     func tick() {

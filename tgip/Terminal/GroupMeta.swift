@@ -2,6 +2,9 @@ import Foundation
 import AppKit
 
 struct GroupMeta: Codable {
+    private static let imageCache = NSCache<NSString, NSImage>()
+    private static var missingImagePaths = Set<String>()
+
     var icon: String = "folder"
     var displayName: String?
     /// Path to a custom image file. Shown instead of the SF Symbol when set.
@@ -41,8 +44,28 @@ struct GroupMeta: Codable {
     /// Load the image at imagePath as an NSImage, scaled to a small icon size.
     func loadImage() -> NSImage? {
         guard let path = imagePath else { return nil }
-        guard let image = NSImage(contentsOfFile: path) else { return nil }
+        let cacheKey = path as NSString
+
+        if let cached = Self.imageCache.object(forKey: cacheKey) {
+            return cached
+        }
+        if Self.missingImagePaths.contains(path) {
+            return nil
+        }
+
+        guard let image = NSImage(contentsOfFile: path) else {
+            Self.missingImagePaths.insert(path)
+            return nil
+        }
         image.size = NSSize(width: 20, height: 20)
+        Self.imageCache.setObject(image, forKey: cacheKey)
         return image
+    }
+
+    static func invalidateImageCache(for path: String?) {
+        guard let path else { return }
+        let cacheKey = path as NSString
+        imageCache.removeObject(forKey: cacheKey)
+        missingImagePaths.remove(path)
     }
 }

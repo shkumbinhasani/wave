@@ -1,13 +1,16 @@
 import SwiftUI
+import Combine
 
 class SidebarTheme: ObservableObject {
     static let shared = SidebarTheme()
 
-    @Published var accentColor: Color { didSet { save() } }
-    @Published var backgroundOpacity: Double { didSet { save() } }
-    @Published var vibrancy: Double { didSet { save() } }
+    private var saveCancellable: AnyCancellable?
+
+    @Published var accentColor: Color
+    @Published var backgroundOpacity: Double
+    @Published var vibrancy: Double
     /// 0 = dark, 1 = light
-    @Published var brightness: Double { didSet { save() } }
+    @Published var brightness: Double
 
     static let presets: [Color] = [
         .white,
@@ -32,6 +35,18 @@ class SidebarTheme: ObservableObject {
             self.accentColor = Color(red: c[0], green: c[1], blue: c[2])
         } else {
             self.accentColor = Color(red: 0.15, green: 0.15, blue: 0.15)
+        }
+
+        saveCancellable = Publishers.CombineLatest4(
+            $accentColor,
+            $backgroundOpacity,
+            $vibrancy,
+            $brightness
+        )
+        .dropFirst()
+        .debounce(for: .milliseconds(150), scheduler: RunLoop.main)
+        .sink { [weak self] _, _, _, _ in
+            self?.save()
         }
     }
 
