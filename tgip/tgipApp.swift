@@ -30,6 +30,15 @@ struct tgipApp: App {
                 .disabled(manager.selectedSession == nil)
             }
 
+            CommandGroup(after: .sidebar) {
+                Button("Toggle Sidebar") {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        manager.sidebarPinned.toggle()
+                    }
+                }
+                .keyboardShortcut("s", modifiers: .command)
+            }
+
             CommandGroup(after: .toolbar) {
                 ForEach(0..<9, id: \.self) { i in
                     Button("Focus Group \(i + 1)") {

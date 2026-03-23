@@ -7,6 +7,7 @@ struct ContentView: View {
     @FocusState private var windowFocusActive: Bool
 
     @State private var sidebarWidth: CGFloat = 250
+    @State private var sidebarHoverVisible: Bool = false
     private let minSidebarWidth: CGFloat = 180
     private let maxSidebarWidth: CGFloat = 400
     private let outerPadding: CGFloat = 10
@@ -32,20 +33,65 @@ struct ContentView: View {
                 }
 
             ZStack(alignment: .leading) {
-                HStack(spacing: 0) {
-                    Sidebar(topInset: 46)
-                        .frame(width: sidebarWidth)
+                // Terminal always fills the space
+                TerminalSurface(sessionID: manager.selectedSessionID)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.leading, manager.sidebarPinned ? sidebarWidth : 0)
 
-                    TerminalSurface(sessionID: manager.selectedSessionID)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                // Sidebar — pinned inline or drawer overlay
+                if manager.sidebarPinned || sidebarHoverVisible {
+                    DraggableContainer {
+                        Sidebar(topInset: 46, sidebarPinned: $manager.sidebarPinned)
+                    }
+                    .frame(width: sidebarWidth)
+                    .background {
+                            if !manager.sidebarPinned {
+                                VisualEffectView(material: .hudWindow, blendingMode: .withinWindow, emphasized: false)
+                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                    .shadow(color: .black.opacity(0.3), radius: 15, x: 5)
+                            }
+                        }
+                        .transition(.move(edge: .leading))
+                        .zIndex(1)
+
+                    // Resize handle
+                    SidebarResizeHandle(width: $sidebarWidth, min: minSidebarWidth, max: maxSidebarWidth)
+                        .frame(width: 8)
+                        .offset(x: sidebarWidth - 4)
+                        .zIndex(2)
                 }
 
-                // Invisible resize handle overlaid on the edge
-                SidebarResizeHandle(width: $sidebarWidth, min: minSidebarWidth, max: maxSidebarWidth)
-                    .frame(width: 8)
-                    .offset(x: sidebarWidth - 4)
+                // Hover trigger zone when sidebar is hidden
+                if !manager.sidebarPinned && !sidebarHoverVisible {
+                    Color.clear
+                        .frame(width: 8)
+                        .contentShape(Rectangle())
+                        .onHover { hovering in
+                            if hovering {
+                                withAnimation(.easeOut(duration: 0.2)) {
+                                    sidebarHoverVisible = true
+                                }
+                            }
+                        }
+                        .zIndex(3)
+                }
             }
             .padding(outerPadding)
+            // Dismiss drawer when mouse leaves sidebar area
+            .onContinuousHover { phase in
+                if !manager.sidebarPinned && sidebarHoverVisible {
+                    switch phase {
+                    case .active(let location):
+                        if location.x > sidebarWidth + outerPadding + 20 {
+                            withAnimation(.easeIn(duration: 0.2)) {
+                                sidebarHoverVisible = false
+                            }
+                        }
+                    case .ended:
+                        break
+                    }
+                }
+            }
         }
         .ignoresSafeArea()
         .background(WindowConfigurator(outerPadding: outerPadding))
@@ -121,6 +167,12 @@ struct Sidebar: View {
     @EnvironmentObject var manager: TerminalManager
     @State private var showThemeEditor = false
     var topInset: CGFloat = 0
+    @Binding var sidebarPinned: Bool
+
+    init(topInset: CGFloat = 0, sidebarPinned: Binding<Bool> = .constant(true)) {
+        self.topInset = topInset
+        self._sidebarPinned = sidebarPinned
+    }
 
     private var groups: [(fullPath: String, sessions: [TerminalSession])] {
         buildGroups(sessions: manager.sessions, pinned: manager.pinnedPaths)
@@ -129,13 +181,33 @@ struct Sidebar: View {
     var body: some View {
         VStack(spacing: 0) {
             // Window controls row
-            HStack {
+            HStack(spacing: 8) {
                 SidebarWindowControls()
+
+                // Sidebar toggle
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        sidebarPinned.toggle()
+                    }
+                } label: {
+                    Image(systemName: "sidebar.left")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.white.opacity(sidebarPinned ? 0.5 : 0.35))
+                }
+                .buttonStyle(.plain)
+                .help(sidebarPinned ? "Hide Sidebar" : "Pin Sidebar")
+
                 Spacer()
             }
             .padding(.leading, 10)
             .padding(.top, 10)
             .padding(.bottom, 2)
+            .contentShape(Rectangle())
+            .contextMenu {
+                Button("Edit Theme...") {
+                    showThemeEditor = true
+                }
+            }
 
             // Groups
             ScrollView {
@@ -191,12 +263,6 @@ struct Sidebar: View {
             .padding(.vertical, 10)
         }
         .frame(maxHeight: .infinity)
-        .contentShape(Rectangle())
-        .contextMenu {
-            Button("Edit Theme...") {
-                showThemeEditor = true
-            }
-        }
         .popover(isPresented: $showThemeEditor, arrowEdge: .trailing) {
             ThemeEditor()
         }

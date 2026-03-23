@@ -17,6 +17,8 @@ class TerminalManager: ObservableObject {
         didSet { saveGroupMeta() }
     }
 
+    @Published var sidebarPinned: Bool = true
+
     /// Which group index is keyboard-focused (nil = none). Set by Cmd+N.
     @Published var focusedGroupIndex: Int?
     /// Which tab within the focused group is highlighted. Arrow keys move this.
