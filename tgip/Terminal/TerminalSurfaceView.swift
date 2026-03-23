@@ -30,6 +30,7 @@ class TerminalSurfaceView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
     override var canBecomeKeyView: Bool { true }
+    override var mouseDownCanMoveWindow: Bool { false }
 
     // MARK: - Lifecycle
 
