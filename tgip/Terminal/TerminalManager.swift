@@ -5,8 +5,13 @@ import GhosttyKit
 class TerminalManager: ObservableObject {
     private var themeCancellable: AnyCancellable?
     private let gitRepositoryService: GitRepositoryService
+    private let attentionMonitor = AttentionMonitor()
     @Published var sessions: [TerminalSession] = []
-    @Published var selectedSessionID: UUID?
+    @Published var selectedSessionID: UUID? {
+        didSet {
+            if let selectedSessionID { clearAttention(for: selectedSessionID) }
+        }
+    }
 
     /// Pinned directory paths — always shown in sidebar, persisted across launches.
     @Published var pinnedPaths: [String] {
@@ -45,6 +50,12 @@ class TerminalManager: ObservableObject {
         ghostty.onAction = { [weak self] target, action in
             self?.handleAction(target: target, action: action) ?? false
         }
+
+        // Attention monitor — highlight tabs when external tools need input
+        attentionMonitor.onAttention = { [weak self] path in
+            self?.handleAttention(at: path)
+        }
+        attentionMonitor.start()
 
         // Sync theme brightness → terminal color scheme
         let theme = SidebarTheme.shared
@@ -213,6 +224,33 @@ class TerminalManager: ObservableObject {
 
     func refreshGitStatus(forRepoRoot repoRoot: String) {
         gitRepositoryService.refresh(repoRoot: repoRoot)
+    }
+
+    // MARK: - Attention
+
+    private func handleAttention(at path: String) {
+        let normalized = GitCLI.normalizePath(path)
+        guard !normalized.isEmpty else { return }
+        for session in sessions {
+            guard let pwd = session.workingDirectory, session.id != selectedSessionID else { continue }
+            if GitCLI.normalizePath(pwd) == normalized {
+                session.needsAttention = true
+            }
+        }
+        sessions = sessions
+        updateDockBadge()
+    }
+
+    func clearAttention(for sessionID: UUID) {
+        if let session = sessions.first(where: { $0.id == sessionID }) {
+            session.needsAttention = false
+        }
+        updateDockBadge()
+    }
+
+    private func updateDockBadge() {
+        let count = sessions.filter(\.needsAttention).count
+        NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
     }
 
     // MARK: - Lookup

@@ -5,6 +5,7 @@ class TerminalSession: Identifiable, ObservableObject {
     @Published var title: String
     @Published var workingDirectory: String?
     @Published var isRunning: Bool = true
+    @Published var needsAttention: Bool = false
 
     /// Strong reference — the view lives as long as the session.
     var surfaceView: TerminalSurfaceView?

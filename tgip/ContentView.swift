@@ -223,6 +223,7 @@ func buildGroups(
 
 struct Sidebar: View {
     @EnvironmentObject var manager: TerminalManager
+    @ObservedObject private var theme = SidebarTheme.shared
     @State private var showThemeEditor = false
     var topInset: CGFloat = 0
     @Binding var sidebarPinned: Bool
@@ -256,7 +257,7 @@ struct Sidebar: View {
                 } label: {
                     Image(systemName: "sidebar.left")
                         .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(.white.opacity(sidebarPinned ? 0.5 : 0.35))
+                        .foregroundStyle(theme.adaptiveForeground(opacity: sidebarPinned ? 0.5 : 0.35))
                 }
                 .buttonStyle(.plain)
                 .help(sidebarPinned ? "Hide Sidebar" : "Pin Sidebar")
@@ -305,7 +306,7 @@ struct Sidebar: View {
                         Text("New Tab")
                             .font(.system(size: 12, weight: .medium))
                     }
-                    .foregroundStyle(.white.opacity(0.5))
+                    .foregroundStyle(theme.adaptiveForeground(opacity: 0.5))
                 }
                 .buttonStyle(.plain)
                 .onHover { h in
@@ -316,7 +317,7 @@ struct Sidebar: View {
 
                 Text("\(manager.sessions.count)")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.3))
+                    .foregroundStyle(theme.adaptiveForeground(opacity: 0.3))
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -372,6 +373,7 @@ struct Sidebar: View {
 
 struct DirectoryGroup: View {
     @EnvironmentObject var manager: TerminalManager
+    @ObservedObject private var theme = SidebarTheme.shared
     let directory: String
     let fullPath: String
     let sessions: [TerminalSession]
@@ -399,7 +401,7 @@ struct DirectoryGroup: View {
 
                 Text(label)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(.white.opacity(isFocused ? 0.9 : 0.65))
+                    .foregroundStyle(theme.adaptiveForeground(opacity: isFocused ? 0.9 : 0.65))
                     .lineLimit(1)
 
                 Spacer()
@@ -417,12 +419,12 @@ struct DirectoryGroup: View {
                 if groupIndex < 9 {
                     Text("\u{2318}\(groupIndex + 1)")
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(isFocused ? 0.55 : 0.3))
+                        .foregroundStyle(theme.adaptiveForeground(opacity: isFocused ? 0.55 : 0.3))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
                         .background(
                             RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(Color.white.opacity(isFocused ? 0.12 : 0.04))
+                                .fill(theme.adaptiveForeground(opacity: isFocused ? 0.12 : 0.04))
                         )
                 }
             }
@@ -430,7 +432,7 @@ struct DirectoryGroup: View {
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isFocused ? Color.white.opacity(0.08) : Color.clear)
+                    .fill(isFocused ? theme.adaptiveForeground(opacity: 0.08) : Color.clear)
             )
             .contentShape(Rectangle())
             .onTapGesture {
@@ -526,6 +528,7 @@ enum DragState {
 
 struct TabRow: View {
     @EnvironmentObject var manager: TerminalManager
+    @ObservedObject private var theme = SidebarTheme.shared
     @ObservedObject var session: TerminalSession
     let directory: String
     var isTabFocused: Bool = false
@@ -533,6 +536,7 @@ struct TabRow: View {
     @State private var hovering = false
     @State private var isDropTarget = false
     @State private var dropAtEnd = false
+    @State private var attentionPulse = false
 
     private var isSelected: Bool {
         manager.selectedSessionID == session.id
@@ -540,6 +544,11 @@ struct TabRow: View {
 
     private var isDragging: Bool {
         DragState.draggedSessionID == session.id
+    }
+
+    private var dotColor: Color {
+        if session.needsAttention { return .orange }
+        return session.isRunning ? .green : .gray
     }
 
     var body: some View {
@@ -553,12 +562,13 @@ struct TabRow: View {
 
             HStack(spacing: 8) {
                 Circle()
-                    .fill(session.isRunning ? Color.green : Color.gray)
+                    .fill(dotColor)
                     .frame(width: 6, height: 6)
+                    .shadow(color: session.needsAttention ? .orange.opacity(attentionPulse ? 0.9 : 0.2) : .clear, radius: 4)
 
                 Text(session.title)
                     .font(.system(size: 14, weight: isSelected ? .medium : .regular))
-                    .foregroundStyle(.white.opacity(isSelected ? 0.95 : 0.75))
+                    .foregroundStyle(theme.adaptiveForeground(opacity: isSelected ? 0.95 : 0.75))
                     .lineLimit(1)
 
                 Spacer()
@@ -567,10 +577,10 @@ struct TabRow: View {
                     Button(action: { manager.closeSession(session) }) {
                         Image(systemName: "xmark")
                             .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(.white.opacity(0.35))
+                            .foregroundStyle(theme.adaptiveForeground(opacity: 0.35))
                             .frame(width: 16, height: 16)
                             .background(
-                                Circle().fill(Color.white.opacity(hovering ? 0.1 : 0))
+                                Circle().fill(theme.adaptiveForeground(opacity: hovering ? 0.1 : 0))
                             )
                     }
                     .buttonStyle(.plain)
@@ -582,8 +592,9 @@ struct TabRow: View {
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(
-                        isSelected ? Color.white.opacity(0.12) :
-                        (hovering || isTabFocused) ? Color.white.opacity(0.06) :
+                        session.needsAttention ? Color.orange.opacity(attentionPulse ? 0.14 : 0.06) :
+                        isSelected ? theme.adaptiveForeground(opacity: 0.12) :
+                        (hovering || isTabFocused) ? theme.adaptiveForeground(opacity: 0.06) :
                         Color.clear
                     )
             )
@@ -602,6 +613,17 @@ struct TabRow: View {
         .onTapGesture {
             manager.selectedSessionID = session.id
             manager.focusedGroupIndex = nil
+        }
+        .onChange(of: session.needsAttention) { _, needs in
+            if needs {
+                withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
+                    attentionPulse = true
+                }
+            } else {
+                withAnimation(.default) {
+                    attentionPulse = false
+                }
+            }
         }
         .onDrag {
             DragState.draggedSessionID = session.id
@@ -709,6 +731,7 @@ struct GroupDropDelegate: DropDelegate {
 }
 
 struct GroupIcon: View {
+    @ObservedObject private var theme = SidebarTheme.shared
     let meta: GroupMeta
     var opacity: Double = 0.55
 
@@ -722,7 +745,7 @@ struct GroupIcon: View {
             } else {
                 Image(systemName: meta.icon)
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.white.opacity(opacity))
+                    .foregroundStyle(theme.adaptiveForeground(opacity: opacity))
             }
         }
         .frame(width: 20, height: 20)
@@ -732,6 +755,7 @@ struct GroupIcon: View {
 
 struct TerminalSurface: View {
     @EnvironmentObject var manager: TerminalManager
+    @ObservedObject private var theme = SidebarTheme.shared
     let sessionID: UUID?
 
     var body: some View {
@@ -739,7 +763,7 @@ struct TerminalSurface: View {
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.14), lineWidth: 1)
+                    .strokeBorder(theme.adaptiveForeground(opacity: 0.14), lineWidth: 1)
             }
             .shadow(color: Color.black.opacity(0.10), radius: 20, y: 10)
     }

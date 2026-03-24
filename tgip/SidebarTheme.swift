@@ -3,11 +3,12 @@ import SwiftUI
 class SidebarTheme: ObservableObject {
     static let shared = SidebarTheme()
 
-    @Published var accentColor: Color { didSet { save() } }
-    @Published var backgroundOpacity: Double { didSet { save() } }
-    @Published var vibrancy: Double { didSet { save() } }
+    @Published var accentColor: Color { didSet { refreshPaletteAndSave() } }
+    @Published var backgroundOpacity: Double { didSet { refreshPaletteAndSave() } }
+    @Published var vibrancy: Double { didSet { refreshPaletteAndSave() } }
     /// 0 = dark, 1 = light
-    @Published var brightness: Double { didSet { save() } }
+    @Published var brightness: Double { didSet { refreshPaletteAndSave() } }
+    @Published var lightText: Bool { didSet { save() } }
 
     static let presets: [Color] = [
         .white,
@@ -33,6 +34,19 @@ class SidebarTheme: ObservableObject {
         } else {
             self.accentColor = Color(red: 0.15, green: 0.15, blue: 0.15)
         }
+        self.lightText = d.object(forKey: "t.lt") as? Bool ?? true
+    }
+
+    func adaptiveForeground(opacity: Double = 1) -> Color {
+        (lightText ? Color.white : Color.black).opacity(Self.clamp(opacity))
+    }
+
+    func adaptiveScrim(opacity: Double = 1) -> Color {
+        (lightText ? Color.black : Color.white).opacity(Self.clamp(opacity))
+    }
+
+    private func refreshPaletteAndSave() {
+        save()
     }
 
     private func save() {
@@ -43,6 +57,11 @@ class SidebarTheme: ObservableObject {
         if let c = NSColor(accentColor).usingColorSpace(.deviceRGB) {
             d.set([c.redComponent, c.greenComponent, c.blueComponent], forKey: "t.acc")
         }
+        d.set(lightText, forKey: "t.lt")
+    }
+
+    private static func clamp(_ value: Double) -> Double {
+        min(max(value, 0), 1)
     }
 
     func colorMatches(_ a: Color, _ b: Color) -> Bool {
@@ -78,7 +97,7 @@ struct ThemeEditor: View {
                     .frame(width: 64, height: 64)
                     .shadow(color: theme.accentColor.opacity(0.5), radius: 20)
                 Circle()
-                    .strokeBorder(Color.white.opacity(0.3), lineWidth: 2)
+                    .strokeBorder(theme.adaptiveForeground(opacity: 0.3), lineWidth: 2)
                     .frame(width: 68, height: 68)
             }
             .padding(.bottom, 14)
@@ -95,7 +114,7 @@ struct ThemeEditor: View {
                             }
                             .overlay {
                                 if theme.colorMatches(color, theme.accentColor) {
-                                    Circle().strokeBorder(Color.white, lineWidth: 2.5)
+                                    Circle().strokeBorder(theme.adaptiveForeground(), lineWidth: 2.5)
                                         .frame(width: 32, height: 32)
                                 }
                             }
@@ -128,6 +147,21 @@ struct ThemeEditor: View {
                 value: $theme.vibrancy
             )
             .padding(.horizontal, 16)
+            .padding(.bottom, 12)
+
+            // Text color toggle
+            HStack(spacing: 10) {
+                Text("Text")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                HStack(spacing: 0) {
+                    textToggleButton("Light", isActive: theme.lightText) { theme.lightText = true }
+                    textToggleButton("Dark", isActive: !theme.lightText) { theme.lightText = false }
+                }
+                .background(Capsule().fill(.quaternary))
+            }
+            .padding(.horizontal, 16)
             .padding(.bottom, 20)
         }
         .frame(width: 260)
@@ -144,13 +178,13 @@ struct ThemeEditor: View {
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule()
-                        .fill(Color.white.opacity(0.08))
+                        .fill(theme.adaptiveForeground(opacity: 0.08))
                         .frame(height: 4)
                     Capsule()
-                        .fill(Color.white.opacity(0.3))
+                        .fill(theme.adaptiveForeground(opacity: 0.3))
                         .frame(width: geo.size.width * value.wrappedValue, height: 4)
                     Circle()
-                        .fill(Color.white)
+                        .fill(theme.adaptiveForeground(opacity: 0.94))
                         .frame(width: 14, height: 14)
                         .shadow(color: .black.opacity(0.2), radius: 2, y: 1)
                         .offset(x: (geo.size.width - 14) * value.wrappedValue)
@@ -180,9 +214,21 @@ struct ThemeEditor: View {
                 .frame(width: 40, height: 32)
                 .background(
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(theme.brightness == val ? Color.white.opacity(0.15) : Color.clear)
+                        .fill(theme.brightness == val ? theme.adaptiveForeground(opacity: 0.15) : Color.clear)
                 )
                 .foregroundStyle(theme.brightness == val ? .primary : .tertiary)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func textToggleButton(_ label: String, isActive: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 5)
+                .background(isActive ? Capsule().fill(.secondary.opacity(0.3)) : nil)
+                .foregroundStyle(isActive ? .primary : .secondary)
         }
         .buttonStyle(.plain)
     }
