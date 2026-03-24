@@ -33,6 +33,15 @@ struct TerminalView: NSViewRepresentable {
         surfaceView.frame = container.bounds
         surfaceView.autoresizingMask = [.width, .height]
         container.addSubview(surfaceView)
-        container.window?.makeFirstResponder(surfaceView)
+
+        // On first launch the container may not yet be in a window,
+        // so dispatch to give the view hierarchy time to settle.
+        if let window = container.window {
+            window.makeFirstResponder(surfaceView)
+        } else {
+            DispatchQueue.main.async {
+                container.window?.makeFirstResponder(surfaceView)
+            }
+        }
     }
 }
