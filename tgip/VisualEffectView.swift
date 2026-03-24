@@ -24,7 +24,26 @@ struct VisualEffectView: NSViewRepresentable {
 }
 
 struct WindowConfigurator: NSViewRepresentable {
+    final class Coordinator {
+        weak var window: NSWindow?
+        var observers: [NSObjectProtocol] = []
+
+        deinit {
+            removeObservers()
+        }
+
+        func removeObservers() {
+            observers.forEach { NotificationCenter.default.removeObserver($0) }
+            observers.removeAll()
+            window = nil
+        }
+    }
+
     var outerPadding: CGFloat
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
@@ -37,6 +56,10 @@ struct WindowConfigurator: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         DispatchQueue.main.async {
             configureWindow(for: nsView)
+        }
+
+        if let window = nsView.window {
+            registerObservers(for: window, coordinator: context.coordinator)
         }
     }
 
@@ -51,12 +74,62 @@ struct WindowConfigurator: NSViewRepresentable {
         window.hasShadow = true
         window.isMovableByWindowBackground = true
         window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView])
+        window.collectionBehavior.insert(.fullScreenPrimary)
 
         let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
-        buttons.compactMap { window.standardWindowButton($0) }.forEach {
+        let nativeButtons = buttons.compactMap { window.standardWindowButton($0) }
+
+        nativeButtons.forEach {
             $0.isHidden = false
             $0.alphaValue = 0.001
             $0.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+        }
+
+        Set(nativeButtons.compactMap(\.superview)).forEach {
+            $0.isHidden = false
+            $0.alphaValue = 0.001
+            $0.setFrameOrigin(NSPoint(x: -10_000, y: $0.frame.origin.y))
+        }
+    }
+
+    private func registerObservers(for window: NSWindow, coordinator: Coordinator) {
+        guard coordinator.window !== window else { return }
+
+        coordinator.removeObservers()
+        coordinator.window = window
+
+        let names: [Notification.Name] = [
+            NSWindow.didEnterFullScreenNotification,
+            NSWindow.didExitFullScreenNotification,
+            NSWindow.didResizeNotification,
+            NSWindow.didBecomeKeyNotification
+        ]
+
+        coordinator.observers = names.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { _ in
+                reconfigure(window)
+            }
+        }
+    }
+
+    private func reconfigure(_ window: NSWindow) {
+        for delay in [0.0, 0.05, 0.2] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
+                let nativeButtons = buttons.compactMap { window.standardWindowButton($0) }
+
+                nativeButtons.forEach {
+                    $0.isHidden = false
+                    $0.alphaValue = 0.001
+                    $0.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+                }
+
+                Set(nativeButtons.compactMap(\.superview)).forEach {
+                    $0.isHidden = false
+                    $0.alphaValue = 0.001
+                    $0.setFrameOrigin(NSPoint(x: -10_000, y: $0.frame.origin.y))
+                }
+            }
         }
     }
 }

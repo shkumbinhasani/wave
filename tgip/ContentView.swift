@@ -5,6 +5,7 @@ struct ContentView: View {
     @EnvironmentObject var manager: TerminalManager
     @StateObject private var theme = SidebarTheme.shared
     @FocusState private var windowFocusActive: Bool
+    @State private var presentedGitDiff: GitDiffPresentation?
 
     @State private var sidebarWidth: CGFloat = 250
     @State private var sidebarHoverVisible: Bool = false
@@ -35,15 +36,35 @@ struct ContentView: View {
             }
 
             ZStack(alignment: .leading) {
-                // Terminal always fills the space
-                TerminalSurface(sessionID: manager.selectedSessionID)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.leading, manager.sidebarPinned ? sidebarWidth : 0)
+                // Terminal or diff inspector fills the main pane
+                Group {
+                    if let presentedGitDiff {
+                        GitDiffInspector(
+                            presentation: presentedGitDiff,
+                            onClose: {
+                                self.presentedGitDiff = nil
+                                refocusTerminal()
+                            }
+                        )
+                        .environmentObject(manager)
+                    } else {
+                        TerminalSurface(sessionID: manager.selectedSessionID)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.leading, manager.sidebarPinned ? sidebarWidth : 0)
 
                 // Sidebar — pinned inline or drawer overlay
                 if manager.sidebarPinned || sidebarHoverVisible {
                     DraggableContainer {
-                        Sidebar(topInset: 46, sidebarPinned: $manager.sidebarPinned)
+                        Sidebar(
+                            topInset: 46,
+                            sidebarPinned: $manager.sidebarPinned,
+                            onOpenGitDiff: { groupPath in
+                                guard let repository = manager.gitRepositoryInfo(for: groupPath) else { return }
+                                presentedGitDiff = GitDiffPresentation(sourcePath: groupPath, repoRoot: repository.repoRoot)
+                            }
+                        )
                     }
                     .frame(width: sidebarWidth)
                     .background {
@@ -127,9 +148,44 @@ struct ContentView: View {
             return .ignored
         }
         .onKeyPress(.escape) {
+            if presentedGitDiff != nil {
+                presentedGitDiff = nil
+                refocusTerminal()
+                return .handled
+            }
             if manager.focusedGroupIndex != nil { manager.cancelFocus(); return .handled }
             return .ignored
         }
+        .background {
+            Button("Toggle Git Diff") {
+                toggleGitDiff()
+            }
+            .keyboardShortcut("d", modifiers: [.command, .shift])
+            .hidden()
+        }
+    }
+
+    private func refocusTerminal() {
+        // Re-select the current session to trigger the terminal surface to become first responder
+        let current = manager.selectedSessionID
+        manager.selectedSessionID = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            manager.selectedSessionID = current
+        }
+    }
+
+    private func toggleGitDiff() {
+        if presentedGitDiff != nil {
+            presentedGitDiff = nil
+            refocusTerminal()
+            return
+        }
+        guard let session = manager.sessions.first(where: { $0.id == manager.selectedSessionID }),
+              let dir = session.workingDirectory,
+              let repo = manager.gitRepositoryInfo(for: dir) else {
+            return
+        }
+        presentedGitDiff = GitDiffPresentation(sourcePath: dir, repoRoot: repo.repoRoot)
     }
 
     /// The same group list the sidebar uses — needed for confirmFocus.
@@ -170,10 +226,16 @@ struct Sidebar: View {
     @State private var showThemeEditor = false
     var topInset: CGFloat = 0
     @Binding var sidebarPinned: Bool
+    var onOpenGitDiff: (String) -> Void
 
-    init(topInset: CGFloat = 0, sidebarPinned: Binding<Bool> = .constant(true)) {
+    init(
+        topInset: CGFloat = 0,
+        sidebarPinned: Binding<Bool> = .constant(true),
+        onOpenGitDiff: @escaping (String) -> Void = { _ in }
+    ) {
         self.topInset = topInset
         self._sidebarPinned = sidebarPinned
+        self.onOpenGitDiff = onOpenGitDiff
     }
 
     private var groups: [(fullPath: String, sessions: [TerminalSession])] {
@@ -208,7 +270,7 @@ struct Sidebar: View {
             // Groups
             ScrollView {
                 VStack(alignment: .leading, spacing: 2) {
-                    let labels = disambiguatedLabels(for: groups.map(\.fullPath))
+                    let labels = disambiguatedLabels(for: groups.map { $0.fullPath })
                     ForEach(Array(groups.enumerated()), id: \.element.fullPath) { groupIndex, group in
                         let isFocused = manager.focusedGroupIndex == groupIndex
                         DirectoryGroup(
@@ -217,7 +279,8 @@ struct Sidebar: View {
                             sessions: group.sessions,
                             groupIndex: groupIndex,
                             isFocused: isFocused,
-                            focusedTabOffset: isFocused ? manager.focusedTabOffset : nil
+                            focusedTabOffset: isFocused ? manager.focusedTabOffset : nil,
+                            onOpenGitDiff: onOpenGitDiff
                         )
 
                         if groupIndex < groups.count - 1 {
@@ -315,8 +378,10 @@ struct DirectoryGroup: View {
     let groupIndex: Int
     let isFocused: Bool
     let focusedTabOffset: Int?
+    let onOpenGitDiff: (String) -> Void
     private var meta: GroupMeta { manager.meta(for: fullPath) }
     private var label: String { meta.displayName ?? directory }
+    private var gitStatus: GitRepoStatus? { manager.gitStatus(forGroupPath: fullPath) }
 
     private static let iconChoices = [
         "folder", "folder.fill", "terminal", "server.rack",
@@ -338,6 +403,16 @@ struct DirectoryGroup: View {
                     .lineLimit(1)
 
                 Spacer()
+
+                if let gitStatus {
+                    Button {
+                        onOpenGitDiff(fullPath)
+                    } label: {
+                        RepoDirtyBadge(status: gitStatus, isFocused: isFocused)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open uncommitted diff")
+                }
 
                 if groupIndex < 9 {
                     Text("\u{2318}\(groupIndex + 1)")
@@ -367,6 +442,13 @@ struct DirectoryGroup: View {
                 Button("New Tab Here") {
                     manager.createSession(in: fullPath)
                 }
+
+                if gitStatus != nil {
+                    Button("Show Uncommitted Diff") {
+                        onOpenGitDiff(fullPath)
+                    }
+                }
+
                 Divider()
                 // Icon picker
                 Menu("Icon") {
@@ -685,7 +767,7 @@ struct SidebarWindowControls: View {
                 }
             }
             WindowDot(color: Color(red: 0.16, green: 0.80, blue: 0.25)) {
-                performWindowAction { $0.zoom(nil) }
+                performWindowAction { $0.toggleFullScreen(nil) }
             }
         }
         .preventWindowDrag()

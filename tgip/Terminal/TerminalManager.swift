@@ -4,6 +4,7 @@ import GhosttyKit
 
 class TerminalManager: ObservableObject {
     private var themeCancellable: AnyCancellable?
+    private let gitRepositoryService: GitRepositoryService
     @Published var sessions: [TerminalSession] = []
     @Published var selectedSessionID: UUID?
 
@@ -23,6 +24,8 @@ class TerminalManager: ObservableObject {
     @Published var focusedGroupIndex: Int?
     /// Which tab within the focused group is highlighted. Arrow keys move this.
     @Published var focusedTabOffset: Int = 0
+    @Published private(set) var gitLookupsByPath: [String: GitPathLookup] = [:]
+    @Published private(set) var gitStatusesByRoot: [String: GitRepoStatus] = [:]
 
     let ghostty: GhosttyRuntime
 
@@ -31,9 +34,14 @@ class TerminalManager: ObservableObject {
     }
 
     init() {
+        self.gitRepositoryService = GitRepositoryService()
         self.pinnedPaths = UserDefaults.standard.stringArray(forKey: "pinnedPaths") ?? []
         self.groupMeta = Self.loadGroupMeta()
         self.ghostty = GhosttyRuntime()
+        gitRepositoryService.onSnapshot = { [weak self] lookups, statuses in
+            self?.gitLookupsByPath = lookups
+            self?.gitStatusesByRoot = statuses
+        }
         ghostty.onAction = { [weak self] target, action in
             self?.handleAction(target: target, action: action) ?? false
         }
@@ -61,6 +69,7 @@ class TerminalManager: ObservableObject {
         sessions.append(session)
         selectedSessionID = session.id
         focusedGroupIndex = nil
+        refreshGitMonitoring()
     }
 
     func closeSession(_ session: TerminalSession) {
@@ -69,6 +78,7 @@ class TerminalManager: ObservableObject {
         if selectedSessionID == session.id {
             selectedSessionID = sessions.last?.id
         }
+        refreshGitMonitoring()
     }
 
     func moveSession(_ draggedID: UUID, before targetID: UUID, in directory: String) {
@@ -105,6 +115,7 @@ class TerminalManager: ObservableObject {
                 setImage(found, for: path)
             }
         }
+        refreshGitMonitoring()
     }
 
     func isPinned(_ path: String) -> Bool {
@@ -168,12 +179,7 @@ class TerminalManager: ObservableObject {
         let group = groups[gi]
         if group.sessions.isEmpty {
             // Pinned group with no tabs — create one there
-            let session = TerminalSession(title: "Terminal \(sessions.count + 1)")
-            session.workingDirectory = group.fullPath
-            let view = TerminalSurfaceView(runtime: ghostty, session: session, workingDirectory: group.fullPath)
-            session.surfaceView = view
-            sessions.append(session)
-            selectedSessionID = session.id
+            createSession(in: group.fullPath)
         } else {
             let clamped = min(focusedTabOffset, group.sessions.count - 1)
             selectedSessionID = group.sessions[clamped].id
@@ -183,6 +189,30 @@ class TerminalManager: ObservableObject {
 
     func cancelFocus() {
         focusedGroupIndex = nil
+    }
+
+    func gitRepositoryInfo(for path: String) -> GitRepositoryInfo? {
+        let normalized = GitCLI.normalizePath(path)
+        guard case let .repo(repository)? = gitLookupsByPath[normalized] else { return nil }
+        return repository
+    }
+
+    func gitStatus(forGroupPath path: String) -> GitRepoStatus? {
+        guard let repository = gitRepositoryInfo(for: path),
+              let status = gitStatusesByRoot[repository.repoRoot],
+              status.hasChanges else {
+            return nil
+        }
+
+        return status
+    }
+
+    func gitStatus(forRepoRoot repoRoot: String) -> GitRepoStatus? {
+        gitStatusesByRoot[GitCLI.normalizePath(repoRoot)]
+    }
+
+    func refreshGitStatus(forRepoRoot repoRoot: String) {
+        gitRepositoryService.refresh(repoRoot: repoRoot)
     }
 
     // MARK: - Lookup
@@ -218,6 +248,7 @@ class TerminalManager: ObservableObject {
                 guard let self else { return }
                 session.workingDirectory = pwd
                 self.sessions = self.sessions
+                self.refreshGitMonitoring()
             }
             return true
 
@@ -241,5 +272,10 @@ class TerminalManager: ObservableObject {
         default:
             return false
         }
+    }
+
+    private func refreshGitMonitoring() {
+        let trackedPaths = sessions.compactMap(\.workingDirectory) + pinnedPaths
+        gitRepositoryService.track(paths: trackedPaths)
     }
 }
