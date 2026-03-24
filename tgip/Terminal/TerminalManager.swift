@@ -52,8 +52,8 @@ class TerminalManager: ObservableObject {
         }
 
         // Attention monitor — highlight tabs when external tools need input
-        attentionMonitor.onAttention = { [weak self] path in
-            self?.handleAttention(at: path)
+        attentionMonitor.onAttention = { [weak self] sessionID, cwd in
+            self?.handleAttention(sessionID: sessionID, cwd: cwd)
         }
         attentionMonitor.start()
 
@@ -228,13 +228,21 @@ class TerminalManager: ObservableObject {
 
     // MARK: - Attention
 
-    private func handleAttention(at path: String) {
-        let normalized = GitCLI.normalizePath(path)
-        guard !normalized.isEmpty else { return }
-        for session in sessions {
-            guard let pwd = session.workingDirectory, session.id != selectedSessionID else { continue }
-            if GitCLI.normalizePath(pwd) == normalized {
+    private func handleAttention(sessionID: UUID?, cwd: String?) {
+        if let sessionID {
+            // Exact match — only highlight the specific tab
+            if let session = sessions.first(where: { $0.id == sessionID }), session.id != selectedSessionID {
                 session.needsAttention = true
+            }
+        } else if let cwd {
+            // Fallback for non-Wave terminals — match by working directory
+            let normalized = GitCLI.normalizePath(cwd)
+            guard !normalized.isEmpty else { return }
+            for session in sessions {
+                guard let pwd = session.workingDirectory, session.id != selectedSessionID else { continue }
+                if GitCLI.normalizePath(pwd) == normalized {
+                    session.needsAttention = true
+                }
             }
         }
         sessions = sessions

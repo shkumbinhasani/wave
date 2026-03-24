@@ -2,17 +2,18 @@ import Foundation
 import CoreServices
 
 /// Watches `/tmp/tgip-attention/` for signal files created by Claude Code's
-/// Notification hook. Each file contains the raw hook JSON; we extract `cwd`
-/// to identify which tab needs attention.
+/// Notification hook. Each file contains the hook JSON + a WAVE_SID trailer
+/// to identify the exact terminal tab.
 final class AttentionMonitor {
     static let directory = "/tmp/tgip-attention"
-    static let hookCommand = "mkdir -p /tmp/tgip-attention && cat > \"/tmp/tgip-attention/$$\""
+    static let hookCommand = "mkdir -p /tmp/tgip-attention && { cat; echo; echo \"WAVE_SID=$WAVE_SESSION_ID\"; } > \"/tmp/tgip-attention/$$\""
 
     private let queue = DispatchQueue(label: "com.wave.attention", qos: .utility)
     private var stream: FSEventStreamRef?
 
-    /// Called on the main queue with the working-directory path that needs attention.
-    var onAttention: ((String) -> Void)?
+    /// Called on the main queue with (sessionID, cwd). sessionID is set when
+    /// running inside Wave; cwd is the fallback from Claude Code's hook JSON.
+    var onAttention: ((_ sessionID: UUID?, _ cwd: String?) -> Void)?
 
     init() {
         try? FileManager.default.createDirectory(
@@ -68,15 +69,12 @@ final class AttentionMonitor {
 
     // MARK: - Claude Code Hook Installation
 
-    /// Ensures the Notification hook is present in ~/.claude/settings.json.
-    /// Returns `true` if the hook was already installed, `false` if it was just added.
     @discardableResult
     static func ensureClaudeCodeHookInstalled() -> Bool {
         let fm = FileManager.default
         let claudeDir = fm.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
         let settingsURL = claudeDir.appendingPathComponent("settings.json")
 
-        // Read existing settings or start fresh
         var settings: [String: Any]
         if let data = try? Data(contentsOf: settingsURL),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -85,24 +83,37 @@ final class AttentionMonitor {
             settings = [:]
         }
 
-        // Check if our hook is already present
+        // Remove any old version of our hook and re-add the current one
+        var needsUpdate = true
         if let hooks = settings["hooks"] as? [String: Any],
            let notifications = hooks["Notification"] as? [[String: Any]] {
             for entry in notifications {
                 if let innerHooks = entry["hooks"] as? [[String: Any]] {
                     for hook in innerHooks {
                         if let cmd = hook["command"] as? String, cmd.contains("tgip-attention") {
-                            return true // Already installed
+                            if cmd.contains("WAVE_SID") {
+                                return true // Already up to date
+                            }
+                            // Old version without session ID — will be replaced below
+                            needsUpdate = true
                         }
                     }
                 }
             }
         }
 
-        // Add our hook
+        // Remove old hook entries containing tgip-attention
         var hooks = settings["hooks"] as? [String: Any] ?? [:]
-        var notifications = hooks["Notification"] as? [[String: Any]] ?? []
+        if var notifications = hooks["Notification"] as? [[String: Any]] {
+            notifications = notifications.filter { entry in
+                guard let innerHooks = entry["hooks"] as? [[String: Any]] else { return true }
+                return !innerHooks.contains { ($0["command"] as? String)?.contains("tgip-attention") == true }
+            }
+            hooks["Notification"] = notifications
+        }
 
+        // Add current hook
+        var notifications = hooks["Notification"] as? [[String: Any]] ?? []
         notifications.append([
             "matcher": "",
             "hooks": [[
@@ -115,15 +126,13 @@ final class AttentionMonitor {
         hooks["Notification"] = notifications
         settings["hooks"] = hooks
 
-        // Ensure ~/.claude/ exists
         try? fm.createDirectory(at: claudeDir, withIntermediateDirectories: true)
 
-        // Write back with pretty printing
         if let data = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) {
             try? data.write(to: settingsURL, options: .atomic)
         }
 
-        return false
+        return !needsUpdate
     }
 
     // MARK: - Private
@@ -136,24 +145,32 @@ final class AttentionMonitor {
             let filePath = (Self.directory as NSString).appendingPathComponent(file)
             defer { try? fm.removeItem(atPath: filePath) }
 
-            guard let data = fm.contents(atPath: filePath), !data.isEmpty else { continue }
+            guard let data = fm.contents(atPath: filePath), !data.isEmpty,
+                  let content = String(data: data, encoding: .utf8) else { continue }
 
-            // Try JSON first (Claude Code hook stdin format: {"cwd": "...", ...})
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let cwd = json["cwd"] as? String, !cwd.isEmpty {
-                DispatchQueue.main.async { [weak self] in
-                    self?.onAttention?(cwd)
+            let lines = content.components(separatedBy: "\n")
+
+            // Look for WAVE_SID=<uuid> line
+            var sessionID: UUID?
+            for line in lines {
+                if line.hasPrefix("WAVE_SID=") {
+                    let raw = String(line.dropFirst("WAVE_SID=".count)).trimmingCharacters(in: .whitespaces)
+                    sessionID = UUID(uuidString: raw)
+                    break
                 }
-                continue
             }
 
-            // Fall back to plain text (manual testing: echo "/path" > /tmp/tgip-attention/test)
-            if let content = String(data: data, encoding: .utf8) {
-                let path = content.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !path.isEmpty {
-                    DispatchQueue.main.async { [weak self] in
-                        self?.onAttention?(path)
-                    }
+            // Extract cwd from JSON (first non-empty line that looks like JSON)
+            var cwd: String?
+            if let jsonLine = lines.first(where: { $0.hasPrefix("{") }),
+               let jsonData = jsonLine.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
+                cwd = json["cwd"] as? String
+            }
+
+            if sessionID != nil || cwd != nil {
+                DispatchQueue.main.async { [weak self] in
+                    self?.onAttention?(sessionID, cwd)
                 }
             }
         }

@@ -113,6 +113,12 @@ class GhosttyRuntime {
 
     func createSurface(for view: TerminalSurfaceView) {
         guard let app else { return }
+
+        // Inject session ID so child shell (and tools like Claude Code) can identify this tab
+        let sessionID = view.session?.id.uuidString ?? ""
+        setenv("WAVE_SESSION_ID", sessionID, 1)
+        defer { unsetenv("WAVE_SESSION_ID") }
+
         var cfg = ghostty_surface_config_new()
         cfg.userdata = Unmanaged.passUnretained(view).toOpaque()
         cfg.platform_tag = GHOSTTY_PLATFORM_MACOS
