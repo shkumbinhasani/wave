@@ -62,6 +62,7 @@ struct ContentView: View {
                             sidebarPinned: $manager.sidebarPinned,
                             onOpenGitDiff: { groupPath in
                                 guard let repository = manager.gitRepositoryInfo(for: groupPath) else { return }
+                                manager.closeSearch()
                                 presentedGitDiff = GitDiffPresentation(sourcePath: groupPath, repoRoot: repository.repoRoot)
                             }
                         )
@@ -148,6 +149,10 @@ struct ContentView: View {
             return .ignored
         }
         .onKeyPress(.escape) {
+            if manager.searchState != nil {
+                manager.closeSearch()
+                return .handled
+            }
             if presentedGitDiff != nil {
                 presentedGitDiff = nil
                 refocusTerminal()
@@ -157,10 +162,33 @@ struct ContentView: View {
             return .ignored
         }
         .background {
-            Button("Toggle Git Diff") {
-                toggleGitDiff()
+            VStack {
+                Button("Find") {
+                    if presentedGitDiff == nil {
+                        manager.showSearch()
+                    }
+                }
+                .keyboardShortcut("f", modifiers: .command)
+
+                Button("Find Next") {
+                    if presentedGitDiff == nil {
+                        manager.navigateSearch(.next)
+                    }
+                }
+                .keyboardShortcut("g", modifiers: .command)
+
+                Button("Find Previous") {
+                    if presentedGitDiff == nil {
+                        manager.navigateSearch(.previous)
+                    }
+                }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+
+                Button("Toggle Git Diff") {
+                    toggleGitDiff()
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
             }
-            .keyboardShortcut("d", modifiers: [.command, .shift])
             .hidden()
         }
     }
@@ -185,6 +213,7 @@ struct ContentView: View {
               let repo = manager.gitRepositoryInfo(for: dir) else {
             return
         }
+        manager.closeSearch()
         presentedGitDiff = GitDiffPresentation(sourcePath: dir, repoRoot: repo.repoRoot)
     }
 
@@ -764,6 +793,26 @@ struct TerminalSurface: View {
             .overlay {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .strokeBorder(theme.adaptiveForeground(opacity: 0.14), lineWidth: 1)
+            }
+            .overlay(alignment: .topTrailing) {
+                if let sessionID,
+                   let searchState = manager.searchState,
+                   searchState.sessionID == sessionID {
+                    TerminalSearchOverlay(
+                        query: Binding(
+                            get: { manager.searchState?.query ?? "" },
+                            set: { manager.updateSearchQuery($0) }
+                        ),
+                        totalMatches: searchState.totalMatches,
+                        selectedMatch: searchState.selectedMatch,
+                        focusToken: manager.searchFocusToken,
+                        onPrevious: { manager.navigateSearch(.previous) },
+                        onNext: { manager.navigateSearch(.next) },
+                        onClose: { manager.closeSearch() }
+                    )
+                    .padding(16)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                }
             }
             .shadow(color: Color.black.opacity(0.10), radius: 20, y: 10)
     }

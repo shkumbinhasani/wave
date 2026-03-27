@@ -8,6 +8,7 @@ class TerminalSurfaceView: NSView {
 
     private var trackingArea: NSTrackingArea?
     private var displayLink: CVDisplayLink?
+    private var windowObservers: [NSObjectProtocol] = []
     private var markedText = NSMutableAttributedString()
 
     /// When non-nil, we're inside a keyDown handler and insertText should
@@ -85,15 +86,46 @@ class TerminalSurfaceView: NSView {
                 .surface.map { ghostty_surface_refresh($0) }
             return kCVReturnSuccess
         }, ud)
-        CVDisplayLinkStart(link)
         self.displayLink = link
+
+        observeWindowVisibility()
+        updateDisplayLinkRunning()
+
         if let screen = window?.screen,
            let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
             surface.map { ghostty_surface_set_display_id($0, id) }
         }
     }
 
+    private func observeWindowVisibility() {
+        let nc = NotificationCenter.default
+        windowObservers.append(nc.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification,
+            object: window, queue: .main
+        ) { [weak self] _ in self?.updateDisplayLinkRunning() })
+        windowObservers.append(nc.addObserver(
+            forName: NSWindow.didMiniaturizeNotification,
+            object: window, queue: .main
+        ) { [weak self] _ in self?.updateDisplayLinkRunning() })
+        windowObservers.append(nc.addObserver(
+            forName: NSWindow.didDeminiaturizeNotification,
+            object: window, queue: .main
+        ) { [weak self] _ in self?.updateDisplayLinkRunning() })
+    }
+
+    private func updateDisplayLinkRunning() {
+        guard let displayLink else { return }
+        let shouldRun = window?.occlusionState.contains(.visible) ?? false
+        if shouldRun && !CVDisplayLinkIsRunning(displayLink) {
+            CVDisplayLinkStart(displayLink)
+        } else if !shouldRun && CVDisplayLinkIsRunning(displayLink) {
+            CVDisplayLinkStop(displayLink)
+        }
+    }
+
     private func stopDisplayLink() {
+        for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
+        windowObservers.removeAll()
         displayLink.map { CVDisplayLinkStop($0) }
         displayLink = nil
     }
@@ -313,10 +345,27 @@ class TerminalSurfaceView: NSView {
         ghostty_surface_mouse_scroll(surface, e.scrollingDeltaX, e.scrollingDeltaY, sm)
     }
 
-    private func performBindingAction(_ action: String) {
-        guard let surface else { return }
-        action.withCString { ptr in
-            _ = ghostty_surface_binding_action(surface, ptr, UInt(action.utf8.count))
+    func startSearch() {
+        _ = performBindingAction("start_search")
+    }
+
+    func updateSearch(_ query: String) {
+        _ = performBindingAction("search:\(query)")
+    }
+
+    func navigateSearch(_ direction: TerminalSearchDirection) {
+        _ = performBindingAction("navigate_search:\(direction.bindingActionValue)")
+    }
+
+    func endSearch() {
+        _ = performBindingAction("end_search")
+    }
+
+    @discardableResult
+    private func performBindingAction(_ action: String) -> Bool {
+        guard let surface else { return false }
+        return action.withCString { ptr in
+            ghostty_surface_binding_action(surface, ptr, UInt(action.utf8.count))
         }
     }
 

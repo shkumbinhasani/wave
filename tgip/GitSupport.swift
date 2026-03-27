@@ -326,7 +326,7 @@ final class GitRepositoryService {
         for repository in activeRepositories where watchers[repository.repoRoot] == nil {
             let monitor = GitEventStreamMonitor(paths: watchPaths(for: repository)) { [weak self] in
                 self?.queue.async {
-                    self?.scheduleRefresh(for: repository.repoRoot, delay: 0.2)
+                    self?.scheduleRefresh(for: repository.repoRoot, delay: 0.5)
                 }
             }
             monitor.start()
@@ -436,10 +436,9 @@ private final class GitEventStreamMonitor {
             &context,
             paths as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-            0.15,
+            1.0,
             FSEventStreamCreateFlags(
                 kFSEventStreamCreateFlagFileEvents |
-                kFSEventStreamCreateFlagNoDefer |
                 kFSEventStreamCreateFlagUseCFTypes |
                 kFSEventStreamCreateFlagWatchRoot
             )

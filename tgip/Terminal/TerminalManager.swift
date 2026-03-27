@@ -10,6 +10,9 @@ class TerminalManager: ObservableObject {
     @Published var selectedSessionID: UUID? {
         didSet {
             if let selectedSessionID { clearAttention(for: selectedSessionID) }
+            if oldValue != selectedSessionID {
+                handleSelectedSessionChange(from: oldValue, to: selectedSessionID)
+            }
         }
     }
 
@@ -29,6 +32,8 @@ class TerminalManager: ObservableObject {
     @Published var focusedGroupIndex: Int?
     /// Which tab within the focused group is highlighted. Arrow keys move this.
     @Published var focusedTabOffset: Int = 0
+    @Published var searchState: TerminalSearchState?
+    @Published var searchFocusToken: Int = 0
     @Published private(set) var gitLookupsByPath: [String: GitPathLookup] = [:]
     @Published private(set) var gitStatusesByRoot: [String: GitRepoStatus] = [:]
 
@@ -226,6 +231,55 @@ class TerminalManager: ObservableObject {
         gitRepositoryService.refresh(repoRoot: repoRoot)
     }
 
+    // MARK: - Search
+
+    func showSearch() {
+        guard let selectedSession = selectedSession else { return }
+
+        if let existing = searchState,
+           existing.sessionID != selectedSession.id,
+           let existingSession = session(for: existing.sessionID) {
+            existingSession.surfaceView?.endSearch()
+        }
+
+        activateSearch(for: selectedSession.id, query: searchState?.sessionID == selectedSession.id ? searchState?.query ?? "" : "")
+        selectedSession.surfaceView?.startSearch()
+        if let query = searchState?.query, !query.isEmpty {
+            selectedSession.surfaceView?.updateSearch(query)
+        }
+        searchFocusToken &+= 1
+    }
+
+    func updateSearchQuery(_ query: String) {
+        guard let session = selectedSession else { return }
+
+        var state = searchState ?? TerminalSearchState(sessionID: session.id, query: query)
+        if state.sessionID != session.id {
+            state = TerminalSearchState(sessionID: session.id, query: query)
+        }
+        state.query = query
+        state.totalMatches = nil
+        state.selectedMatch = nil
+        searchState = state
+
+        session.surfaceView?.updateSearch(query)
+    }
+
+    func navigateSearch(_ direction: TerminalSearchDirection) {
+        guard let state = searchState,
+              let session = session(for: state.sessionID) else {
+            return
+        }
+
+        session.surfaceView?.navigateSearch(direction)
+    }
+
+    func closeSearch() {
+        guard let state = searchState else { return }
+        session(for: state.sessionID)?.surfaceView?.endSearch()
+        clearSearchState(for: state.sessionID)
+    }
+
     // MARK: - Attention
 
     private func handleAttention(sessionID: UUID?, cwd: String?) {
@@ -265,6 +319,10 @@ class TerminalManager: ObservableObject {
 
     private func findSession(for ptr: ghostty_surface_t) -> TerminalSession? {
         sessions.first { $0.surfaceView?.surface == ptr }
+    }
+
+    private func session(for id: UUID) -> TerminalSession? {
+        sessions.first { $0.id == id }
     }
 
     // MARK: - Actions
@@ -312,6 +370,38 @@ class TerminalManager: ObservableObject {
             DispatchQueue.main.async { session.isRunning = false }
             return true
 
+        case GHOSTTY_ACTION_START_SEARCH:
+            guard let surfacePtr, let session = findSession(for: surfacePtr) else { return true }
+            let needle = String(cString: action.action.start_search.needle)
+            DispatchQueue.main.async { [weak self] in
+                self?.activateSearch(for: session.id, query: needle)
+                self?.searchFocusToken &+= 1
+            }
+            return true
+
+        case GHOSTTY_ACTION_END_SEARCH:
+            guard let surfacePtr, let session = findSession(for: surfacePtr) else { return true }
+            DispatchQueue.main.async { [weak self] in
+                self?.clearSearchState(for: session.id)
+            }
+            return true
+
+        case GHOSTTY_ACTION_SEARCH_TOTAL:
+            guard let surfacePtr, let session = findSession(for: surfacePtr) else { return true }
+            let rawTotal = Int(action.action.search_total.total)
+            DispatchQueue.main.async { [weak self] in
+                self?.updateSearchTotal(rawTotal >= 0 ? rawTotal : nil, for: session.id)
+            }
+            return true
+
+        case GHOSTTY_ACTION_SEARCH_SELECTED:
+            guard let surfacePtr, let session = findSession(for: surfacePtr) else { return true }
+            let rawSelected = Int(action.action.search_selected.selected)
+            DispatchQueue.main.async { [weak self] in
+                self?.updateSearchSelection(rawSelected >= 0 ? rawSelected : nil, for: session.id)
+            }
+            return true
+
         case GHOSTTY_ACTION_MOUSE_SHAPE:
             return true
 
@@ -323,5 +413,47 @@ class TerminalManager: ObservableObject {
     private func refreshGitMonitoring() {
         let trackedPaths = sessions.compactMap(\.workingDirectory) + pinnedPaths
         gitRepositoryService.track(paths: trackedPaths)
+    }
+
+    private func handleSelectedSessionChange(from previous: UUID?, to current: UUID?) {
+        guard let previous,
+              previous != current,
+              searchState?.sessionID == previous else {
+            return
+        }
+
+        session(for: previous)?.surfaceView?.endSearch()
+        clearSearchState(for: previous)
+    }
+
+    private func activateSearch(for sessionID: UUID, query: String) {
+        if let existing = searchState,
+           existing.sessionID != sessionID,
+           let existingSession = session(for: existing.sessionID) {
+            existingSession.surfaceView?.endSearch()
+        }
+
+        if let existing = searchState, existing.sessionID == sessionID, existing.query == query {
+            return
+        }
+
+        searchState = TerminalSearchState(sessionID: sessionID, query: query)
+    }
+
+    private func clearSearchState(for sessionID: UUID) {
+        guard searchState?.sessionID == sessionID else { return }
+        searchState = nil
+    }
+
+    private func updateSearchTotal(_ total: Int?, for sessionID: UUID) {
+        guard var state = searchState, state.sessionID == sessionID else { return }
+        state.totalMatches = total
+        searchState = state
+    }
+
+    private func updateSearchSelection(_ selected: Int?, for sessionID: UUID) {
+        guard var state = searchState, state.sessionID == sessionID else { return }
+        state.selectedMatch = selected
+        searchState = state
     }
 }
