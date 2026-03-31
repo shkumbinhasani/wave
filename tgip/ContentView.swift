@@ -298,7 +298,7 @@ struct Sidebar: View {
             .padding(.bottom, 2)
 
             // Groups
-            ScrollView {
+            ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 2) {
                     let labels = disambiguatedLabels(for: groups.map { $0.fullPath })
                     ForEach(Array(groups.enumerated()), id: \.element.fullPath) { groupIndex, group in

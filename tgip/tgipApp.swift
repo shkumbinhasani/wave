@@ -10,6 +10,9 @@ struct tgipApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(manager)
+                .onAppear {
+                    appDelegate.terminalManager = manager
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .commands {

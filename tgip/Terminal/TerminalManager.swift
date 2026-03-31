@@ -89,12 +89,36 @@ class TerminalManager: ObservableObject {
     }
 
     func closeSession(_ session: TerminalSession) {
+        guard shouldCloseSession(session) else { return }
+        closeSessionNow(session)
+    }
+
+    func shouldConfirmAppQuit() -> Bool {
+        ghostty.appNeedsConfirmQuit()
+    }
+
+    private func closeSessionNow(_ session: TerminalSession) {
         session.surfaceView?.destroySurface()
         sessions.removeAll { $0.id == session.id }
         if selectedSessionID == session.id {
             selectedSessionID = sessions.last?.id
         }
         refreshGitMonitoring()
+    }
+
+    private func shouldCloseSession(_ session: TerminalSession) -> Bool {
+        guard let surface = session.surfaceView?.surface,
+              ghostty_surface_needs_confirm_quit(surface) else {
+            return true
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Close Tab?"
+        alert.informativeText = "A process is still running in \"\(session.title)\". Closing this tab will terminate it."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Close Tab")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     func moveSession(_ draggedID: UUID, before targetID: UUID, in directory: String) {
@@ -360,7 +384,7 @@ class TerminalManager: ObservableObject {
             DispatchQueue.main.async { [weak self] in self?.createSession() }
             return true
 
-        case GHOSTTY_ACTION_CLOSE_WINDOW:
+        case GHOSTTY_ACTION_CLOSE_TAB, GHOSTTY_ACTION_CLOSE_WINDOW:
             guard let surfacePtr, let session = findSession(for: surfacePtr) else { return true }
             DispatchQueue.main.async { [weak self] in self?.closeSession(session) }
             return true

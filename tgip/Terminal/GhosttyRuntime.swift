@@ -111,6 +111,11 @@ class GhosttyRuntime {
         ghostty_app_set_color_scheme(app, dark ? GHOSTTY_COLOR_SCHEME_DARK : GHOSTTY_COLOR_SCHEME_LIGHT)
     }
 
+    func appNeedsConfirmQuit() -> Bool {
+        guard let app else { return false }
+        return ghostty_app_needs_confirm_quit(app)
+    }
+
     func createSurface(for view: TerminalSurfaceView) {
         guard let app else { return }
 

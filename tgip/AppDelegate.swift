@@ -1,15 +1,21 @@
 import AppKit
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+    weak var terminalManager: TerminalManager?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         moveToApplicationsIfNeeded()
         AttentionMonitor.ensureClaudeCodeHookInstalled()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard terminalManager?.shouldConfirmAppQuit() == true else {
+            return .terminateNow
+        }
+
         let alert = NSAlert()
         alert.messageText = "Quit Wave?"
-        alert.informativeText = "All terminal sessions will be closed."
+        alert.informativeText = "One or more terminal tabs still have running processes. Quitting will close them."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Quit")
         alert.addButton(withTitle: "Cancel")
