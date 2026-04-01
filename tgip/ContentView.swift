@@ -898,6 +898,7 @@ struct ProfileBar: View {
     @State private var hoveredIndex: Int?
 
     @State private var scrolledActiveID: UUID?
+    @State private var barWidth: CGFloat = 0
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -963,8 +964,13 @@ struct ProfileBar: View {
         }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
+            .frame(minWidth: barWidth)
         }
         .scrollPosition(id: $scrolledActiveID, anchor: .center)
+        .background(GeometryReader { geo in
+            Color.clear.onAppear { barWidth = geo.size.width }
+                .onChange(of: geo.size.width) { _, w in barWidth = w }
+        })
         .onAppear { scrolledActiveID = manager.activeProfile.id }
         .onChange(of: manager.activeProfileIndex) { _, _ in
             withAnimation(.easeInOut(duration: 0.2)) {
