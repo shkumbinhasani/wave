@@ -897,25 +897,26 @@ struct ProfileBar: View {
     @ObservedObject private var theme = SidebarTheme.shared
     @State private var hoveredIndex: Int?
 
+    @State private var scrolledActiveID: UUID?
+
     var body: some View {
-        HStack(spacing: 12) {
-            ForEach(Array(manager.profiles.enumerated()), id: \.element.id) { index, profile in
-                Button(action: { withAnimation(.easeInOut(duration: 0.25)) { manager.switchToProfile(index) } }) {
-                    Group {
-                        if index == manager.activeProfileIndex {
-                            Image(systemName: profile.icon)
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundStyle(theme.adaptiveForeground(opacity: hoveredIndex == index ? 0.9 : 0.7))
-                        } else {
-                            Circle()
-                                .fill(theme.adaptiveForeground(opacity: hoveredIndex == index ? 0.5 : 0.3))
-                                .frame(width: 8, height: 8)
-                        }
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(Array(manager.profiles.enumerated()), id: \.element.id) { index, profile in
+                    let isActive = index == manager.activeProfileIndex
+                    Button(action: { withAnimation(.easeInOut(duration: 0.25)) { manager.switchToProfile(index) } }) {
+                        Image(systemName: profile.icon)
+                            .font(.system(size: isActive ? 14 : 11, weight: .medium))
+                            .foregroundStyle(theme.adaptiveForeground(
+                                opacity: isActive
+                                    ? (hoveredIndex == index ? 0.9 : 0.7)
+                                    : (hoveredIndex == index ? 0.55 : 0.35)
+                            ))
+                            .frame(width: 24, height: 24)
+                            .contentShape(Rectangle())
                     }
-                    .frame(width: 28, height: 28)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
+                    .buttonStyle(.plain)
+                    .id(profile.id)
                 .onHover { h in
                     hoveredIndex = h ? index : nil
                     if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
@@ -960,12 +961,21 @@ struct ProfileBar: View {
                 }
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+        }
+        .scrollPosition(id: $scrolledActiveID, anchor: .center)
+        .onAppear { scrolledActiveID = manager.activeProfile.id }
+        .onChange(of: manager.activeProfileIndex) { _, _ in
+            withAnimation(.easeInOut(duration: 0.2)) {
+                scrolledActiveID = manager.activeProfile.id
+            }
+        }
         .background(
             Capsule()
                 .fill(theme.adaptiveForeground(opacity: 0.04))
         )
+        .clipShape(Capsule())
         .contextMenu {
             Button("Add New Profile") {
                 manager.addProfile()
