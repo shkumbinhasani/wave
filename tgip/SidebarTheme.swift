@@ -3,6 +3,11 @@ import SwiftUI
 class SidebarTheme: ObservableObject {
     static let shared = SidebarTheme()
 
+    /// Set by TerminalManager to persist theme changes back to the active profile.
+    var onThemeChanged: (() -> Void)?
+    /// True while loading values from a profile — suppresses change callbacks.
+    var isApplying = false
+
     @Published var accentColor: Color { didSet { refreshPaletteAndSave() } }
     @Published var backgroundOpacity: Double { didSet { refreshPaletteAndSave() } }
     @Published var vibrancy: Double { didSet { refreshPaletteAndSave() } }
@@ -45,6 +50,18 @@ class SidebarTheme: ObservableObject {
         (lightText ? Color.black : Color.white).opacity(Self.clamp(opacity))
     }
 
+    func apply(from profile: Profile) {
+        isApplying = true
+        withAnimation(.easeInOut(duration: 0.35)) {
+            accentColor = profile.accentColor
+            backgroundOpacity = profile.backgroundOpacity
+            vibrancy = profile.vibrancy
+            brightness = profile.brightness
+            lightText = profile.lightText
+        }
+        isApplying = false
+    }
+
     private func refreshPaletteAndSave() {
         save()
     }
@@ -58,6 +75,10 @@ class SidebarTheme: ObservableObject {
             d.set([c.redComponent, c.greenComponent, c.blueComponent], forKey: "t.acc")
         }
         d.set(lightText, forKey: "t.lt")
+
+        if !isApplying {
+            onThemeChanged?()
+        }
     }
 
     private static func clamp(_ value: Double) -> Double {

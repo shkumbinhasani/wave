@@ -70,9 +70,20 @@ struct ContentView: View {
                     .frame(width: sidebarWidth)
                     .background {
                             if !manager.sidebarPinned {
-                                VisualEffectView(material: .hudWindow, blendingMode: .withinWindow, emphasized: false)
-                                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                    .shadow(color: .black.opacity(0.3), radius: 15, x: 5)
+                                ZStack {
+                                    VisualEffectView(material: .hudWindow, blendingMode: .withinWindow, emphasized: false)
+                                    theme.accentColor.opacity(theme.backgroundOpacity)
+                                    LinearGradient(
+                                        colors: [
+                                            Color.white.opacity(theme.brightness * 0.2),
+                                            Color.white.opacity(theme.brightness * 0.06)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                }
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .shadow(color: .black.opacity(0.3), radius: 15, x: 5)
                             }
                         }
                         .transition(.move(edge: .leading))
@@ -254,6 +265,7 @@ struct Sidebar: View {
     @EnvironmentObject var manager: TerminalManager
     @ObservedObject private var theme = SidebarTheme.shared
     @State private var showThemeEditor = false
+    @State private var scrolledProfileID: UUID?
     var topInset: CGFloat = 0
     @Binding var sidebarPinned: Bool
     var onOpenGitDiff: (String) -> Void
@@ -268,7 +280,7 @@ struct Sidebar: View {
         self.onOpenGitDiff = onOpenGitDiff
     }
 
-    private var groups: [(fullPath: String, sessions: [TerminalSession])] {
+    private var activeGroups: [(fullPath: String, sessions: [TerminalSession])] {
         buildGroups(sessions: manager.sessions, pinned: manager.pinnedPaths)
     }
 
@@ -278,7 +290,6 @@ struct Sidebar: View {
             HStack(spacing: 8) {
                 SidebarWindowControls()
 
-                // Sidebar toggle
                 Button {
                     withAnimation(.easeInOut(duration: 0.2)) {
                         sidebarPinned.toggle()
@@ -297,59 +308,63 @@ struct Sidebar: View {
             .padding(.top, 10)
             .padding(.bottom, 2)
 
-            // Groups
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 2) {
-                    let labels = disambiguatedLabels(for: groups.map { $0.fullPath })
-                    ForEach(Array(groups.enumerated()), id: \.element.fullPath) { groupIndex, group in
-                        let isFocused = manager.focusedGroupIndex == groupIndex
-                        DirectoryGroup(
-                            directory: labels[group.fullPath] ?? group.fullPath,
-                            fullPath: group.fullPath,
-                            sessions: group.sessions,
-                            groupIndex: groupIndex,
-                            isFocused: isFocused,
-                            focusedTabOffset: isFocused ? manager.focusedTabOffset : nil,
-                            onOpenGitDiff: onOpenGitDiff
-                        )
-
-                        if groupIndex < groups.count - 1 {
-                            Divider().opacity(0.3).padding(.horizontal, 12).padding(.vertical, 4)
-                        }
+            // Groups — horizontally paginated per profile
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(spacing: 0) {
+                    ForEach(manager.profiles) { profile in
+                        profilePage(profile)
+                            .containerRelativeFrame(.horizontal)
                     }
                 }
-                .padding(.leading, 2)
-                .padding(.trailing, 10)
-                .padding(.top, 4)
-                .padding(.bottom, 8)
+                .scrollTargetLayout()
+            }
+            .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
+            .scrollPosition(id: $scrolledProfileID)
+            .onAppear {
+                scrolledProfileID = manager.activeProfile.id
+            }
+            .onChange(of: scrolledProfileID) { _, newID in
+                guard let newID,
+                      let index = manager.profiles.firstIndex(where: { $0.id == newID }),
+                      index != manager.activeProfileIndex else { return }
+                manager.switchToProfile(index, direction: index > manager.activeProfileIndex ? .forward : .backward)
+            }
+            .onChange(of: manager.activeProfileIndex) { _, newIndex in
+                let targetID = manager.profiles[newIndex].id
+                guard scrolledProfileID != targetID else { return }
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    scrolledProfileID = targetID
+                }
             }
 
             Divider().opacity(0.3).padding(.horizontal, 12)
 
             // Bottom bar
-            HStack(spacing: 12) {
+            HStack(spacing: 0) {
+                Text("\(manager.sessions.count)")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundStyle(theme.adaptiveForeground(opacity: 0.3))
+                    .frame(width: 30, alignment: .center)
+
+                Spacer()
+
+                ProfileBar()
+
+                Spacer()
+
                 Button(action: { manager.createSession() }) {
-                    HStack(spacing: 5) {
-                        Image(systemName: "plus")
-                            .font(.system(size: 11, weight: .medium))
-                        Text("New Tab")
-                            .font(.system(size: 12, weight: .medium))
-                    }
-                    .foregroundStyle(theme.adaptiveForeground(opacity: 0.5))
+                    Image(systemName: "plus")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(theme.adaptiveForeground(opacity: 0.5))
+                        .frame(width: 30, height: 30)
                 }
                 .buttonStyle(.plain)
                 .onHover { h in
                     if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
                 }
-
-                Spacer()
-
-                Text("\(manager.sessions.count)")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(theme.adaptiveForeground(opacity: 0.3))
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
         }
         .frame(maxHeight: .infinity)
         .contentShape(Rectangle())
@@ -360,6 +375,54 @@ struct Sidebar: View {
         }
         .popover(isPresented: $showThemeEditor, arrowEdge: .trailing) {
             ThemeEditor()
+        }
+    }
+
+    // MARK: - Profile page
+
+    @ViewBuilder
+    private func profilePage(_ profile: Profile) -> some View {
+        let index = manager.profiles.firstIndex(where: { $0.id == profile.id }) ?? 0
+        let isActive = index == manager.activeProfileIndex
+
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 2) {
+                let profileGroups = isActive
+                    ? activeGroups
+                    : buildGroups(sessions: manager.sessionsForProfile(at: index), pinned: profile.pinnedPaths)
+                let labels = disambiguatedLabels(for: profileGroups.map { $0.fullPath })
+
+                ForEach(Array(profileGroups.enumerated()), id: \.element.fullPath) { groupIndex, group in
+                    if isActive {
+                        let isFocused = manager.focusedGroupIndex == groupIndex
+                        DirectoryGroup(
+                            directory: labels[group.fullPath] ?? group.fullPath,
+                            fullPath: group.fullPath,
+                            sessions: group.sessions,
+                            groupIndex: groupIndex,
+                            isFocused: isFocused,
+                            focusedTabOffset: isFocused ? manager.focusedTabOffset : nil,
+                            onOpenGitDiff: onOpenGitDiff
+                        )
+                    } else {
+                        let meta = profile.groupMeta[group.fullPath] ?? GroupMeta()
+                        InactiveGroupRow(
+                            sessions: group.sessions,
+                            meta: meta,
+                            label: meta.displayName ?? (labels[group.fullPath] ?? group.fullPath),
+                            gitStatus: manager.gitStatusForProfile(at: index, groupPath: group.fullPath)
+                        )
+                    }
+
+                    if groupIndex < profileGroups.count - 1 {
+                        Divider().opacity(0.3).padding(.horizontal, 12).padding(.vertical, 4)
+                    }
+                }
+            }
+            .padding(.leading, 2)
+            .padding(.trailing, 10)
+            .padding(.top, 4)
+            .padding(.bottom, 8)
         }
     }
 
@@ -395,6 +458,51 @@ struct Sidebar: View {
             result[entry.path] = entry.comps.reversed().joined(separator: "/")
         }
         return result
+    }
+}
+
+// MARK: - Inactive profile group (read-only preview)
+
+struct InactiveGroupRow: View {
+    @ObservedObject private var theme = SidebarTheme.shared
+    let sessions: [TerminalSession]
+    let meta: GroupMeta
+    let label: String
+    var gitStatus: GitRepoStatus?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                GroupIcon(meta: meta, opacity: 0.4)
+                Text(label)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(theme.adaptiveForeground(opacity: 0.45))
+                    .lineLimit(1)
+                Spacer()
+                if let gitStatus {
+                    RepoDirtyBadge(status: gitStatus, isFocused: false)
+                        .opacity(0.6)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+
+            ForEach(sessions) { session in
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(session.isRunning ? Color.green.opacity(0.5) : Color.gray.opacity(0.5))
+                        .frame(width: 6, height: 6)
+                    Text(session.title)
+                        .font(.system(size: 14))
+                        .foregroundStyle(theme.adaptiveForeground(opacity: 0.4))
+                        .lineLimit(1)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+            }
+        }
+        .padding(.vertical, 2)
     }
 }
 
@@ -779,6 +887,90 @@ struct GroupIcon: View {
         }
         .frame(width: 20, height: 20)
         .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
+    }
+}
+
+// MARK: - Profile Bar
+
+struct ProfileBar: View {
+    @EnvironmentObject var manager: TerminalManager
+    @ObservedObject private var theme = SidebarTheme.shared
+    @State private var hoveredIndex: Int?
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ForEach(Array(manager.profiles.enumerated()), id: \.element.id) { index, profile in
+                Button(action: { withAnimation(.easeInOut(duration: 0.25)) { manager.switchToProfile(index) } }) {
+                    Group {
+                        if index == manager.activeProfileIndex {
+                            Image(systemName: profile.icon)
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundStyle(theme.adaptiveForeground(opacity: hoveredIndex == index ? 0.9 : 0.7))
+                        } else {
+                            Circle()
+                                .fill(theme.adaptiveForeground(opacity: hoveredIndex == index ? 0.5 : 0.3))
+                                .frame(width: 8, height: 8)
+                        }
+                    }
+                    .frame(width: 28, height: 28)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .onHover { h in
+                    hoveredIndex = h ? index : nil
+                    if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+                }
+                .contextMenu {
+                    Button("Rename Profile...") {
+                        let alert = NSAlert()
+                        alert.messageText = "Rename Profile"
+                        alert.informativeText = "Enter a name for this profile"
+                        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
+                        field.stringValue = profile.name
+                        alert.accessoryView = field
+                        alert.addButton(withTitle: "OK")
+                        alert.addButton(withTitle: "Cancel")
+                        if alert.runModal() == .alertFirstButtonReturn, !field.stringValue.isEmpty {
+                            manager.renameProfile(field.stringValue, at: index)
+                        }
+                    }
+
+                    Menu("Icon") {
+                        ForEach(Profile.iconChoices, id: \.self) { icon in
+                            Button {
+                                manager.setProfileIcon(icon, at: index)
+                            } label: {
+                                Label(icon, systemImage: icon)
+                            }
+                        }
+                    }
+
+                    Divider()
+
+                    Button("Add New Profile") {
+                        manager.addProfile()
+                    }
+
+                    if manager.profiles.count > 1 {
+                        Divider()
+                        Button("Delete Profile") {
+                            manager.deleteProfile(at: index)
+                        }
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            Capsule()
+                .fill(theme.adaptiveForeground(opacity: 0.04))
+        )
+        .contextMenu {
+            Button("Add New Profile") {
+                manager.addProfile()
+            }
+        }
     }
 }
 

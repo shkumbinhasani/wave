@@ -49,6 +49,22 @@ struct tgipApp: App {
                     }
                     .keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)
                 }
+
+                Divider()
+
+                Button("Next Profile") {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        manager.switchToNextProfile()
+                    }
+                }
+                .keyboardShortcut(.rightArrow, modifiers: [.control])
+
+                Button("Previous Profile") {
+                    withAnimation(.easeInOut(duration: 0.25)) {
+                        manager.switchToPreviousProfile()
+                    }
+                }
+                .keyboardShortcut(.leftArrow, modifiers: [.control])
             }
         }
     }

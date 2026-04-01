@@ -16,14 +16,41 @@ class TerminalManager: ObservableObject {
         }
     }
 
-    /// Pinned directory paths — always shown in sidebar, persisted across launches.
-    @Published var pinnedPaths: [String] {
-        didSet { UserDefaults.standard.set(pinnedPaths, forKey: "pinnedPaths") }
+    // MARK: - Profiles
+
+    enum ProfileSwitchDirection { case forward, backward }
+
+    @Published var profiles: [Profile] = []
+    @Published var activeProfileIndex: Int = 0
+    /// Direction of the last profile switch — drives slide animation.
+    @Published var profileSwitchDirection: ProfileSwitchDirection = .forward
+    /// Per-profile session storage (kept alive while profile is inactive).
+    private var storedSessions: [UUID: [TerminalSession]] = [:]
+    /// Per-profile selected session.
+    private var storedSelectedSession: [UUID: UUID?] = [:]
+    /// Suppresses didSet persistence during profile switch.
+    private var isSwitchingProfile = false
+
+    var activeProfile: Profile {
+        profiles.indices.contains(activeProfileIndex) ? profiles[activeProfileIndex] : Profile()
+    }
+
+    /// Pinned directory paths — always shown in sidebar, persisted via profile.
+    @Published var pinnedPaths: [String] = [] {
+        didSet {
+            guard !isSwitchingProfile, profiles.indices.contains(activeProfileIndex) else { return }
+            profiles[activeProfileIndex].pinnedPaths = pinnedPaths
+            scheduleSave()
+        }
     }
 
     /// Per-group metadata (icon, display name). Keyed by absolute path.
-    @Published var groupMeta: [String: GroupMeta] {
-        didSet { saveGroupMeta() }
+    @Published var groupMeta: [String: GroupMeta] = [:] {
+        didSet {
+            guard !isSwitchingProfile, profiles.indices.contains(activeProfileIndex) else { return }
+            profiles[activeProfileIndex].groupMeta = groupMeta
+            scheduleSave()
+        }
     }
 
     @Published var sidebarPinned: Bool = true
@@ -45,9 +72,32 @@ class TerminalManager: ObservableObject {
 
     init() {
         self.gitRepositoryService = GitRepositoryService()
-        self.pinnedPaths = UserDefaults.standard.stringArray(forKey: "pinnedPaths") ?? []
-        self.groupMeta = Self.loadGroupMeta()
         self.ghostty = GhosttyRuntime()
+
+        // Load profiles or migrate from legacy settings
+        if let data = UserDefaults.standard.data(forKey: "profiles"),
+           let loaded = try? JSONDecoder().decode([Profile].self, from: data),
+           !loaded.isEmpty {
+            self.profiles = loaded
+            self.activeProfileIndex = min(
+                max(UserDefaults.standard.integer(forKey: "activeProfileIndex"), 0),
+                loaded.count - 1
+            )
+        } else {
+            // Migration: create default profile from existing settings
+            var defaultProfile = Profile()
+            defaultProfile.pinnedPaths = UserDefaults.standard.stringArray(forKey: "pinnedPaths") ?? []
+            defaultProfile.groupMeta = Self.loadGroupMeta()
+            defaultProfile.captureTheme(from: SidebarTheme.shared)
+            self.profiles = [defaultProfile]
+            self.activeProfileIndex = 0
+        }
+
+        // Load active profile data
+        let active = profiles[activeProfileIndex]
+        self.pinnedPaths = active.pinnedPaths
+        self.groupMeta = active.groupMeta
+
         gitRepositoryService.onSnapshot = { [weak self] lookups, statuses in
             self?.gitLookupsByPath = lookups
             self?.gitStatusesByRoot = statuses
@@ -62,8 +112,9 @@ class TerminalManager: ObservableObject {
         }
         attentionMonitor.start()
 
-        // Sync theme brightness → terminal color scheme
+        // Apply theme from active profile & sync brightness → terminal color scheme
         let theme = SidebarTheme.shared
+        theme.apply(from: active)
         ghostty.setColorScheme(dark: theme.brightness < 0.5)
         themeCancellable = theme.$brightness
             .removeDuplicates()
@@ -71,10 +122,22 @@ class TerminalManager: ObservableObject {
                 self?.ghostty.setColorScheme(dark: val < 0.5)
             }
 
+        // Persist theme edits back to the active profile
+        theme.onThemeChanged = { [weak self] in
+            self?.saveThemeToActiveProfile()
+        }
+
+        saveProfiles()
         createSession()
     }
 
     // MARK: - Sessions
+
+    /// Sessions for a given profile index (active uses live array, others use stored).
+    func sessionsForProfile(at index: Int) -> [TerminalSession] {
+        if index == activeProfileIndex { return sessions }
+        return storedSessions[profiles[index].id] ?? []
+    }
 
     func createSession(in directory: String? = nil) {
         let pwd = directory ?? selectedSession?.workingDirectory
@@ -184,18 +247,161 @@ class TerminalManager: ObservableObject {
         groupMeta[path] = m
     }
 
-    private func saveGroupMeta() {
-        if let data = try? JSONEncoder().encode(groupMeta) {
-            UserDefaults.standard.set(data, forKey: "groupMeta")
-        }
-    }
-
     private static func loadGroupMeta() -> [String: GroupMeta] {
         guard let data = UserDefaults.standard.data(forKey: "groupMeta"),
               let meta = try? JSONDecoder().decode([String: GroupMeta].self, from: data) else {
             return [:]
         }
         return meta
+    }
+
+    /// Git status for a group path in any profile — data is tracked globally.
+    func gitStatusForProfile(at index: Int, groupPath path: String) -> GitRepoStatus? {
+        gitStatus(forGroupPath: path)
+    }
+
+    // MARK: - Profile Management
+
+    func switchToProfile(_ index: Int, direction: ProfileSwitchDirection? = nil) {
+        guard index != activeProfileIndex, profiles.indices.contains(index) else { return }
+
+        profileSwitchDirection = direction ?? (index > activeProfileIndex ? .forward : .backward)
+        isSwitchingProfile = true
+
+        // Save current profile state
+        let currentID = profiles[activeProfileIndex].id
+        storedSessions[currentID] = sessions
+        storedSelectedSession[currentID] = selectedSessionID
+        profiles[activeProfileIndex].pinnedPaths = pinnedPaths
+        profiles[activeProfileIndex].groupMeta = groupMeta
+        profiles[activeProfileIndex].captureTheme(from: SidebarTheme.shared)
+
+        // Close search if open
+        if let state = searchState {
+            session(for: state.sessionID)?.surfaceView?.endSearch()
+            searchState = nil
+        }
+        focusedGroupIndex = nil
+
+        // Switch
+        activeProfileIndex = index
+        UserDefaults.standard.set(index, forKey: "activeProfileIndex")
+
+        // Load new profile — git data stays warm globally, no restore needed
+        let newProfile = profiles[index]
+        sessions = storedSessions[newProfile.id] ?? []
+        selectedSessionID = storedSelectedSession[newProfile.id] ?? nil
+        pinnedPaths = newProfile.pinnedPaths
+        groupMeta = newProfile.groupMeta
+        SidebarTheme.shared.apply(from: newProfile)
+
+        isSwitchingProfile = false
+
+        // Ensure at least one session
+        if sessions.isEmpty {
+            createSession()
+        } else if selectedSessionID == nil {
+            selectedSessionID = sessions.first?.id
+        }
+
+        refreshGitMonitoring()
+        saveProfiles()
+    }
+
+    func switchToNextProfile() {
+        let next = (activeProfileIndex + 1) % profiles.count
+        switchToProfile(next, direction: .forward)
+    }
+
+    func switchToPreviousProfile() {
+        let prev = (activeProfileIndex - 1 + profiles.count) % profiles.count
+        switchToProfile(prev, direction: .backward)
+    }
+
+    func addProfile() {
+        let newProfile = Profile(
+            name: "Profile \(profiles.count + 1)",
+            icon: Profile.iconChoices[profiles.count % Profile.iconChoices.count]
+        )
+        profiles.append(newProfile)
+        saveProfiles()
+        switchToProfile(profiles.count - 1, direction: .forward)
+    }
+
+    func deleteProfile(at index: Int) {
+        guard profiles.count > 1, profiles.indices.contains(index) else { return }
+
+        let profileID = profiles[index].id
+
+        // Close all sessions in the deleted profile
+        let sessionsToClose = storedSessions[profileID] ?? (index == activeProfileIndex ? sessions : [])
+        for session in sessionsToClose {
+            session.surfaceView?.destroySurface()
+        }
+        storedSessions.removeValue(forKey: profileID)
+        storedSelectedSession.removeValue(forKey: profileID)
+
+        if index == activeProfileIndex {
+            // Switch to adjacent profile first
+            let newIndex = index > 0 ? index - 1 : 1
+            switchToProfile(newIndex)
+            // Remove after switching (index shifted if needed)
+            let removeIndex = index > 0 ? index : 0
+            profiles.remove(at: removeIndex)
+            activeProfileIndex = min(activeProfileIndex, profiles.count - 1)
+        } else {
+            profiles.remove(at: index)
+            if index < activeProfileIndex {
+                activeProfileIndex -= 1
+            }
+        }
+
+        UserDefaults.standard.set(activeProfileIndex, forKey: "activeProfileIndex")
+        saveProfiles()
+    }
+
+    func renameProfile(_ name: String, at index: Int) {
+        guard profiles.indices.contains(index) else { return }
+        profiles[index].name = name
+        saveProfiles()
+    }
+
+    func setProfileIcon(_ icon: String, at index: Int) {
+        guard profiles.indices.contains(index) else { return }
+        profiles[index].icon = icon
+        saveProfiles()
+    }
+
+    private var saveWorkItem: DispatchWorkItem?
+
+    /// Immediate save — use for explicit user actions (add/delete/rename profile).
+    private func saveProfiles() {
+        saveWorkItem?.cancel()
+        writeToDisk()
+    }
+
+    /// Debounced save — use for high-frequency changes (theme sliders, typing).
+    private func scheduleSave() {
+        saveWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.writeToDisk()
+        }
+        saveWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    private func writeToDisk() {
+        // Capture latest theme into profile before writing
+        if profiles.indices.contains(activeProfileIndex) {
+            profiles[activeProfileIndex].captureTheme(from: SidebarTheme.shared)
+        }
+        if let data = try? JSONEncoder().encode(profiles) {
+            UserDefaults.standard.set(data, forKey: "profiles")
+        }
+    }
+
+    private func saveThemeToActiveProfile() {
+        scheduleSave()
     }
 
     // MARK: - Group Navigation
@@ -435,8 +641,12 @@ class TerminalManager: ObservableObject {
     }
 
     private func refreshGitMonitoring() {
-        let trackedPaths = sessions.compactMap(\.workingDirectory) + pinnedPaths
-        gitRepositoryService.track(paths: trackedPaths)
+        // Active sessions + pinned paths from all profiles (for sidebar badges)
+        var allPaths = sessions.compactMap(\.workingDirectory) + pinnedPaths
+        for profile in profiles {
+            allPaths.append(contentsOf: profile.pinnedPaths)
+        }
+        gitRepositoryService.track(paths: Array(Set(allPaths)))
     }
 
     private func handleSelectedSessionChange(from previous: UUID?, to current: UUID?) {
