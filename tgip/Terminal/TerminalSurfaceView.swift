@@ -15,6 +15,12 @@ class TerminalSurfaceView: NSView {
     /// accumulate text here instead of sending it directly.
     private var keyTextAccumulator: [String]?
 
+    /// Whether this tab is the currently selected (visible) tab.
+    /// When false, the CVDisplayLink is paused to save CPU.
+    var isActiveTab: Bool = false {
+        didSet { if oldValue != isActiveTab { updateDisplayLinkRunning() } }
+    }
+
     var initialWorkingDirectory: String?
     var initialCommand: String?
     var initialInput: String?
@@ -119,7 +125,8 @@ class TerminalSurfaceView: NSView {
 
     private func updateDisplayLinkRunning() {
         guard let displayLink else { return }
-        let shouldRun = window?.occlusionState.contains(.visible) ?? false
+        let windowVisible = window?.occlusionState.contains(.visible) ?? false
+        let shouldRun = isActiveTab && windowVisible
         if shouldRun && !CVDisplayLinkIsRunning(displayLink) {
             CVDisplayLinkStart(displayLink)
         } else if !shouldRun && CVDisplayLinkIsRunning(displayLink) {

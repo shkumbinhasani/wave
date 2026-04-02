@@ -4,6 +4,7 @@ import GhosttyKit
 class GhosttyRuntime {
     private(set) var app: ghostty_app_t?
     private var config: ghostty_config_t?
+    private var tickPending = false
 
     var onAction: ((_ target: ghostty_target_s, _ action: ghostty_action_s) -> Bool)?
 
@@ -34,7 +35,15 @@ class GhosttyRuntime {
         rt.wakeup_cb = { ud in
             guard let ud else { return }
             let runtime = Unmanaged<GhosttyRuntime>.fromOpaque(ud).takeUnretainedValue()
-            DispatchQueue.main.async { runtime.tick() }
+            // Coalesce rapid wakeups into a single tick per runloop cycle
+            DispatchQueue.main.async {
+                guard !runtime.tickPending else { return }
+                runtime.tickPending = true
+                DispatchQueue.main.async {
+                    runtime.tickPending = false
+                    runtime.tick()
+                }
+            }
         }
 
         rt.action_cb = { appPtr, target, action in

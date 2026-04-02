@@ -176,6 +176,8 @@ class TerminalManager: ObservableObject {
             selectedSessionID = session.id
         }
 
+        // New session becomes selected, so selectedSessionID didSet handles activation
+
         focusedGroupIndex = nil
         refreshGitMonitoring()
     }
@@ -297,6 +299,11 @@ class TerminalManager: ObservableObject {
         profileSwitchDirection = direction ?? (index > activeProfileIndex ? .forward : .backward)
         isSwitchingProfile = true
 
+        // Pause rendering on all current profile sessions
+        for session in sessions {
+            session.surfaceView?.isActiveTab = false
+        }
+
         // Save current profile state
         let currentID = profiles[activeProfileIndex].id
         storedSessions[currentID] = sessions
@@ -331,6 +338,11 @@ class TerminalManager: ObservableObject {
             createSession()
         } else if selectedSessionID == nil {
             selectedSessionID = sessions.first?.id
+        }
+
+        // Resume rendering on the newly selected tab
+        if let current = selectedSessionID {
+            session(for: current)?.surfaceView?.isActiveTab = true
         }
 
         refreshGitMonitoring()
@@ -682,6 +694,14 @@ class TerminalManager: ObservableObject {
     }
 
     private func handleSelectedSessionChange(from previous: UUID?, to current: UUID?) {
+        // Pause rendering on the old tab, resume on the new one
+        if let previous, let oldView = session(for: previous)?.surfaceView {
+            oldView.isActiveTab = false
+        }
+        if let current, let newView = session(for: current)?.surfaceView {
+            newView.isActiveTab = true
+        }
+
         guard let previous,
               previous != current,
               searchState?.sessionID == previous else {

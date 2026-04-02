@@ -301,7 +301,7 @@ final class GitRepositoryService {
 
                 if let repository {
                     self?.lookupsByPath[path] = .repo(repository)
-                    self?.scheduleRefresh(for: repository.repoRoot, delay: 0.05)
+                    self?.scheduleRefresh(for: repository.repoRoot, delay: 0.3)
                 } else {
                     self?.lookupsByPath[path] = .notRepo
                 }
@@ -331,7 +331,7 @@ final class GitRepositoryService {
         for repository in activeRepositories where watchers[repository.repoRoot] == nil {
             let monitor = GitEventStreamMonitor(paths: watchPaths(for: repository)) { [weak self] in
                 self?.queue.async {
-                    self?.scheduleRefresh(for: repository.repoRoot, delay: 0.5)
+                    self?.scheduleRefresh(for: repository.repoRoot, delay: 1.5)
                 }
             }
             monitor.start()
@@ -376,7 +376,7 @@ final class GitRepositoryService {
                 self?.publishSnapshot()
 
                 if self?.pendingRefreshRoots.remove(repoRoot) != nil {
-                    self?.scheduleRefresh(for: repoRoot, delay: 0.05)
+                    self?.scheduleRefresh(for: repoRoot, delay: 1.0)
                 }
             }
         }
@@ -446,7 +446,7 @@ private final class GitEventStreamMonitor {
             &context,
             paths as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
-            1.0,
+            2.0,
             FSEventStreamCreateFlags(
                 kFSEventStreamCreateFlagFileEvents |
                 kFSEventStreamCreateFlagUseCFTypes |

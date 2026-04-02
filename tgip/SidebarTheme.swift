@@ -7,13 +7,14 @@ class SidebarTheme: ObservableObject {
     var onThemeChanged: (() -> Void)?
     /// True while loading values from a profile — suppresses change callbacks.
     var isApplying = false
+    private var saveWorkItem: DispatchWorkItem?
 
-    @Published var accentColor: Color { didSet { refreshPaletteAndSave() } }
-    @Published var backgroundOpacity: Double { didSet { refreshPaletteAndSave() } }
-    @Published var vibrancy: Double { didSet { refreshPaletteAndSave() } }
+    @Published var accentColor: Color { didSet { debouncedSave() } }
+    @Published var backgroundOpacity: Double { didSet { debouncedSave() } }
+    @Published var vibrancy: Double { didSet { debouncedSave() } }
     /// 0 = dark, 1 = light
-    @Published var brightness: Double { didSet { refreshPaletteAndSave() } }
-    @Published var lightText: Bool { didSet { save() } }
+    @Published var brightness: Double { didSet { debouncedSave() } }
+    @Published var lightText: Bool { didSet { debouncedSave() } }
 
     static let presets: [Color] = [
         .white,
@@ -60,14 +61,20 @@ class SidebarTheme: ObservableObject {
             lightText = profile.lightText
         }
         isApplying = false
-        save()
+        flushSave()
     }
 
-    private func refreshPaletteAndSave() {
-        save()
+    private func debouncedSave() {
+        guard !isApplying else { return }
+        saveWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.flushSave()
+        }
+        saveWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
-    private func save() {
+    private func flushSave() {
         guard !isApplying else { return }
         let d = UserDefaults.standard
         d.set(backgroundOpacity, forKey: "t.bg")
@@ -77,22 +84,25 @@ class SidebarTheme: ObservableObject {
             d.set([c.redComponent, c.greenComponent, c.blueComponent], forKey: "t.acc")
         }
         d.set(lightText, forKey: "t.lt")
-
-        if !isApplying {
-            onThemeChanged?()
-        }
+        onThemeChanged?()
     }
 
     private static func clamp(_ value: Double) -> Double {
         min(max(value, 0), 1)
     }
 
-    func colorMatches(_ a: Color, _ b: Color) -> Bool {
-        guard let na = NSColor(a).usingColorSpace(.deviceRGB),
-              let nb = NSColor(b).usingColorSpace(.deviceRGB) else { return false }
-        return abs(na.redComponent - nb.redComponent) < 0.05
-            && abs(na.greenComponent - nb.greenComponent) < 0.05
-            && abs(na.blueComponent - nb.blueComponent) < 0.05
+    /// Index of the matching preset for the current accent color, or nil.
+    var matchingPresetIndex: Int? {
+        guard let na = NSColor(accentColor).usingColorSpace(.deviceRGB) else { return nil }
+        for (i, preset) in Self.presets.enumerated() {
+            guard let nb = NSColor(preset).usingColorSpace(.deviceRGB) else { continue }
+            if abs(na.redComponent - nb.redComponent) < 0.05
+                && abs(na.greenComponent - nb.greenComponent) < 0.05
+                && abs(na.blueComponent - nb.blueComponent) < 0.05 {
+                return i
+            }
+        }
+        return nil
     }
 }
 
@@ -127,8 +137,9 @@ struct ThemeEditor: View {
 
             // Color dots
             ScrollView(.horizontal, showsIndicators: false) {
+                let activeIndex = theme.matchingPresetIndex
                 HStack(spacing: 10) {
-                    ForEach(SidebarTheme.presets, id: \.description) { color in
+                    ForEach(Array(SidebarTheme.presets.enumerated()), id: \.offset) { index, color in
                         Circle()
                             .fill(color)
                             .frame(width: 28, height: 28)
@@ -136,7 +147,7 @@ struct ThemeEditor: View {
                                 Circle().strokeBorder(Color.black.opacity(0.12), lineWidth: 1)
                             }
                             .overlay {
-                                if theme.colorMatches(color, theme.accentColor) {
+                                if index == activeIndex {
                                     Circle().strokeBorder(theme.adaptiveForeground(), lineWidth: 2.5)
                                         .frame(width: 32, height: 32)
                                 }
