@@ -16,11 +16,15 @@ class TerminalSurfaceView: NSView {
     private var keyTextAccumulator: [String]?
 
     var initialWorkingDirectory: String?
+    var initialCommand: String?
+    var initialInput: String?
 
-    init(runtime: GhosttyRuntime, session: TerminalSession, workingDirectory: String? = nil) {
+    init(runtime: GhosttyRuntime, session: TerminalSession, workingDirectory: String? = nil, command: String? = nil, initialInput: String? = nil) {
         self.runtime = runtime
         self.session = session
         self.initialWorkingDirectory = workingDirectory
+        self.initialCommand = command
+        self.initialInput = initialInput
         super.init(frame: .zero)
         wantsLayer = true
         layer?.isOpaque = true

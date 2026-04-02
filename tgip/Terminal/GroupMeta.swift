@@ -38,11 +38,19 @@ struct GroupMeta: Codable {
         return nil
     }
 
+    private static let imageCache = NSCache<NSString, NSImage>()
+
     /// Load the image at imagePath as an NSImage, scaled to a small icon size.
+    /// Results are cached in memory to avoid disk I/O on every SwiftUI render.
     func loadImage() -> NSImage? {
         guard let path = imagePath else { return nil }
+        let key = path as NSString
+        if let cached = Self.imageCache.object(forKey: key) {
+            return cached
+        }
         guard let image = NSImage(contentsOfFile: path) else { return nil }
         image.size = NSSize(width: 20, height: 20)
+        Self.imageCache.setObject(image, forKey: key)
         return image
     }
 }

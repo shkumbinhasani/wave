@@ -60,6 +60,7 @@ class SidebarTheme: ObservableObject {
             lightText = profile.lightText
         }
         isApplying = false
+        save()
     }
 
     private func refreshPaletteAndSave() {
@@ -67,6 +68,7 @@ class SidebarTheme: ObservableObject {
     }
 
     private func save() {
+        guard !isApplying else { return }
         let d = UserDefaults.standard
         d.set(backgroundOpacity, forKey: "t.bg")
         d.set(vibrancy, forKey: "t.vib")

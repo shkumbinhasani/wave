@@ -12,6 +12,9 @@ struct Profile: Identifiable, Codable {
     var brightness: Double
     var lightText: Bool
 
+    // Connection
+    var sshHost: String?
+
     // Workspace
     var pinnedPaths: [String]
     var groupMeta: [String: GroupMeta]
@@ -37,6 +40,7 @@ struct Profile: Identifiable, Codable {
         self.vibrancy = 1.0
         self.brightness = 0.0
         self.lightText = true
+        self.sshHost = nil
         self.pinnedPaths = []
         self.groupMeta = [:]
     }

@@ -141,12 +141,41 @@ class TerminalManager: ObservableObject {
 
     func createSession(in directory: String? = nil) {
         let pwd = directory ?? selectedSession?.workingDirectory
-        let session = TerminalSession(title: "Terminal \(sessions.count + 1)")
-        session.workingDirectory = pwd
-        let view = TerminalSurfaceView(runtime: ghostty, session: session, workingDirectory: pwd)
-        session.surfaceView = view
-        sessions.append(session)
-        selectedSessionID = session.id
+        let profile = activeProfile
+
+        if let host = profile.sshHost {
+            // SSH session
+            let password = KeychainHelper.load(for: host)
+            let input: String
+
+            if let password, !password.isEmpty {
+                let safe = password.replacingOccurrences(of: "'", with: "'\\''")
+                let id = UUID().uuidString.prefix(8)
+                let tmp = "/tmp/.wave_\(id)"
+                let script = "#!/bin/sh\ntrap 'rm -f \"$0\"' EXIT\nWAVE_SSH_PASS='\(safe)'\nexport WAVE_SSH_PASS\nexec /usr/bin/expect -c 'spawn ssh \(host); expect assword:; send \"$env(WAVE_SSH_PASS)\\r\"; interact'"
+                try? script.write(toFile: tmp, atomically: true, encoding: .utf8)
+                try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: tmp)
+                input = " clear && \(tmp)\n"
+            } else {
+                input = " clear && ssh \(host)\n"
+            }
+
+            let session = TerminalSession(title: host)
+            session.workingDirectory = "ssh://\(host)"
+            let view = TerminalSurfaceView(runtime: ghostty, session: session, initialInput: input)
+            session.surfaceView = view
+            sessions.append(session)
+            selectedSessionID = session.id
+        } else {
+            // Local session
+            let session = TerminalSession(title: "Terminal \(sessions.count + 1)")
+            session.workingDirectory = pwd
+            let view = TerminalSurfaceView(runtime: ghostty, session: session, workingDirectory: pwd)
+            session.surfaceView = view
+            sessions.append(session)
+            selectedSessionID = session.id
+        }
+
         focusedGroupIndex = nil
         refreshGitMonitoring()
     }
@@ -366,6 +395,12 @@ class TerminalManager: ObservableObject {
         saveProfiles()
     }
 
+    func setSSHHost(_ host: String?, at index: Int) {
+        guard profiles.indices.contains(index) else { return }
+        profiles[index].sshHost = host
+        saveProfiles()
+    }
+
     func setProfileIcon(_ icon: String, at index: Int) {
         guard profiles.indices.contains(index) else { return }
         profiles[index].icon = icon
@@ -529,7 +564,6 @@ class TerminalManager: ObservableObject {
                 }
             }
         }
-        sessions = sessions
         updateDockBadge()
     }
 
@@ -568,10 +602,8 @@ class TerminalManager: ObservableObject {
         case GHOSTTY_ACTION_SET_TITLE:
             guard let surfacePtr, let session = findSession(for: surfacePtr) else { return true }
             let title = String(cString: action.action.set_title.title)
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
+            DispatchQueue.main.async {
                 session.title = title
-                self.sessions = self.sessions
             }
             return true
 
@@ -581,7 +613,7 @@ class TerminalManager: ObservableObject {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 session.workingDirectory = pwd
-                self.sessions = self.sessions
+                self.objectWillChange.send()
                 self.refreshGitMonitoring()
             }
             return true

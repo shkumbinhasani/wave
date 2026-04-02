@@ -949,6 +949,49 @@ struct ProfileBar: View {
 
                     Divider()
 
+                    Button(profile.sshHost != nil ? "Edit SSH Connection..." : "Set SSH Host...") {
+                        let alert = NSAlert()
+                        alert.messageText = "SSH Connection"
+                        alert.informativeText = "Password is stored securely in Keychain"
+                        let stack = NSStackView(frame: NSRect(x: 0, y: 0, width: 260, height: 56))
+                        stack.orientation = .vertical
+                        stack.spacing = 8
+                        let hostField = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+                        hostField.stringValue = profile.sshHost ?? ""
+                        hostField.placeholderString = "user@hostname"
+                        let passField = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+                        passField.placeholderString = "password (optional)"
+                        if let host = profile.sshHost { passField.stringValue = KeychainHelper.load(for: host) ?? "" }
+                        stack.addArrangedSubview(hostField)
+                        stack.addArrangedSubview(passField)
+                        alert.accessoryView = stack
+                        alert.addButton(withTitle: "OK")
+                        alert.addButton(withTitle: "Cancel")
+                        if alert.runModal() == .alertFirstButtonReturn {
+                            let oldHost = profile.sshHost
+                            let newHost = hostField.stringValue.isEmpty ? nil : hostField.stringValue
+                            manager.setSSHHost(newHost, at: index)
+                            // Update Keychain
+                            if let old = oldHost, old != newHost { KeychainHelper.delete(for: old) }
+                            if let host = newHost {
+                                if !passField.stringValue.isEmpty {
+                                    KeychainHelper.save(password: passField.stringValue, for: host)
+                                } else {
+                                    KeychainHelper.delete(for: host)
+                                }
+                            }
+                        }
+                    }
+
+                    if profile.sshHost != nil {
+                        Button("Remove SSH Host") {
+                            if let host = profile.sshHost { KeychainHelper.delete(for: host) }
+                            manager.setSSHHost(nil, at: index)
+                        }
+                    }
+
+                    Divider()
+
                     Button("Add New Profile") {
                         manager.addProfile()
                     }

@@ -136,6 +136,18 @@ class GhosttyRuntime {
         if let pwd = view.initialWorkingDirectory {
             pwd.withCString { ptr in
                 cfg.working_directory = ptr
+                if let input = view.initialInput {
+                    input.withCString { iPtr in
+                        cfg.initial_input = iPtr
+                        view.surface = ghostty_surface_new(app, &cfg)
+                    }
+                } else {
+                    view.surface = ghostty_surface_new(app, &cfg)
+                }
+            }
+        } else if let input = view.initialInput {
+            input.withCString { iPtr in
+                cfg.initial_input = iPtr
                 view.surface = ghostty_surface_new(app, &cfg)
             }
         } else {
