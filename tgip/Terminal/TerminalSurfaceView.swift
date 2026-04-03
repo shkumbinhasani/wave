@@ -1,5 +1,6 @@
 import AppKit
 import GhosttyKit
+import QuartzCore
 
 class TerminalSurfaceView: NSView {
     var surface: ghostty_surface_t?
@@ -58,16 +59,34 @@ class TerminalSurfaceView: NSView {
     override func layout() {
         super.layout()
         guard let surface else { return }
-        let s = window?.backingScaleFactor ?? 2.0
-        let w = UInt32(bounds.width * s), h = UInt32(bounds.height * s)
+        let scaledSize = convertToBacking(bounds.size)
+        let w = UInt32(scaledSize.width), h = UInt32(scaledSize.height)
         if w > 0 && h > 0 { ghostty_surface_set_size(surface, w, h) }
     }
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
-        guard let surface, let w = window else { return }
-        let s = w.backingScaleFactor
-        ghostty_surface_set_content_scale(surface, Double(s), Double(s))
+
+        // Sync the layer's contentsScale so the compositor doesn't rescale
+        if let window {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer?.contentsScale = window.backingScaleFactor
+            CATransaction.commit()
+        }
+
+        guard let surface else { return }
+
+        // Use convertToBacking for accurate per-axis scale
+        let fbFrame = convertToBacking(frame)
+        let xScale = fbFrame.size.width / frame.size.width
+        let yScale = fbFrame.size.height / frame.size.height
+        ghostty_surface_set_content_scale(surface, xScale, yScale)
+
+        // Recalculate pixel size with the new scale
+        let scaledSize = convertToBacking(bounds.size)
+        let pw = UInt32(scaledSize.width), ph = UInt32(scaledSize.height)
+        if pw > 0 && ph > 0 { ghostty_surface_set_size(surface, pw, ph) }
     }
 
     override func updateTrackingAreas() {
@@ -121,6 +140,26 @@ class TerminalSurfaceView: NSView {
             forName: NSWindow.didDeminiaturizeNotification,
             object: window, queue: .main
         ) { [weak self] _ in self?.updateDisplayLinkRunning() })
+        windowObservers.append(nc.addObserver(
+            forName: NSWindow.didChangeScreenNotification,
+            object: window, queue: .main
+        ) { [weak self] _ in self?.handleScreenChange() })
+    }
+
+    private func handleScreenChange() {
+        guard let surface, let w = window else { return }
+
+        // Update display ID so ghostty renders on the correct display
+        if let screen = w.screen,
+           let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
+            ghostty_surface_set_display_id(surface, id)
+        }
+
+        // Re-trigger backing properties update async — AppKit may not fire
+        // viewDidChangeBackingProperties on its own during screen transitions
+        DispatchQueue.main.async { [weak self] in
+            self?.viewDidChangeBackingProperties()
+        }
     }
 
     private func updateDisplayLinkRunning() {
