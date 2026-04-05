@@ -337,8 +337,6 @@ struct Sidebar: View {
                 }
             }
 
-            Divider().opacity(0.3).padding(.horizontal, 12)
-
             // Bottom bar
             HStack(spacing: 0) {
                 Text("\(manager.sessions.count)")
