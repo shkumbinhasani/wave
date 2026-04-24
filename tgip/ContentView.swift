@@ -61,7 +61,8 @@ struct ContentView: View {
                             topInset: 46,
                             sidebarPinned: $manager.sidebarPinned,
                             onOpenGitDiff: { groupPath in
-                                guard let repository = manager.gitRepositoryInfo(for: groupPath) else { return }
+                                guard manager.gitIntegrationEnabled,
+                                      let repository = manager.gitRepositoryInfo(for: groupPath) else { return }
                                 manager.closeSearch()
                                 presentedGitDiff = GitDiffPresentation(sourcePath: groupPath, repoRoot: repository.repoRoot)
                             }
@@ -144,6 +145,11 @@ struct ContentView: View {
                 windowFocusActive = true
             }
         }
+        .onChange(of: manager.gitIntegrationEnabled) { _, enabled in
+            guard !enabled, presentedGitDiff != nil else { return }
+            presentedGitDiff = nil
+            refocusTerminal()
+        }
         .onKeyPress(.upArrow) {
             if manager.focusedGroupIndex != nil { manager.moveFocusUp(); return .handled }
             return .ignored
@@ -199,6 +205,7 @@ struct ContentView: View {
                     toggleGitDiff()
                 }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(!manager.gitIntegrationEnabled)
             }
             .hidden()
         }
@@ -219,6 +226,7 @@ struct ContentView: View {
             refocusTerminal()
             return
         }
+        guard manager.gitIntegrationEnabled else { return }
         guard let session = manager.sessions.first(where: { $0.id == manager.selectedSessionID }),
               let dir = session.workingDirectory,
               let repo = manager.gitRepositoryInfo(for: dir) else {

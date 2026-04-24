@@ -67,5 +67,27 @@ struct tgipApp: App {
                 .keyboardShortcut(.leftArrow, modifiers: [.control])
             }
         }
+
+        Settings {
+            AppSettingsView()
+                .environmentObject(manager)
+        }
+    }
+}
+
+private struct AppSettingsView: View {
+    @EnvironmentObject private var manager: TerminalManager
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Toggle("Enable Git integration", isOn: $manager.gitIntegrationEnabled)
+
+            Text("Shows repository dirty badges and enables the uncommitted diff inspector.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(20)
+        .frame(width: 360, alignment: .leading)
     }
 }

@@ -287,6 +287,29 @@ final class GitRepositoryService {
         }
     }
 
+    func reset() {
+        queue.async {
+            self.trackedPaths = []
+            self.lookupsByPath = [:]
+            self.statusesByRoot = [:]
+            self.resolvingPaths = []
+            self.refreshingRoots = []
+            self.pendingRefreshRoots = []
+
+            for workItem in self.scheduledRefreshes.values {
+                workItem.cancel()
+            }
+            self.scheduledRefreshes = [:]
+
+            for watcher in self.watchers.values {
+                watcher.stop()
+            }
+            self.watchers = [:]
+
+            self.publishSnapshot()
+        }
+    }
+
     private func resolveRepositoryIfNeeded(for path: String) {
         guard !path.isEmpty else { return }
         guard lookupsByPath[path] == nil else { return }
@@ -297,17 +320,24 @@ final class GitRepositoryService {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let repository = GitCLI.resolveRepository(at: path)
             self?.queue.async {
-                self?.resolvingPaths.remove(path)
+                guard let self else { return }
+                self.resolvingPaths.remove(path)
 
-                if let repository {
-                    self?.lookupsByPath[path] = .repo(repository)
-                    self?.scheduleRefresh(for: repository.repoRoot, delay: 0.3)
-                } else {
-                    self?.lookupsByPath[path] = .notRepo
+                guard self.trackedPaths.contains(path) else {
+                    self.reconcileWatchers()
+                    self.publishSnapshot()
+                    return
                 }
 
-                self?.reconcileWatchers()
-                self?.publishSnapshot()
+                if let repository {
+                    self.lookupsByPath[path] = .repo(repository)
+                    self.scheduleRefresh(for: repository.repoRoot, delay: 0.3)
+                } else {
+                    self.lookupsByPath[path] = .notRepo
+                }
+
+                self.reconcileWatchers()
+                self.publishSnapshot()
             }
         }
     }
@@ -371,12 +401,20 @@ final class GitRepositoryService {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let status = GitCLI.status(for: repository)
             self?.queue.async {
-                self?.statusesByRoot[repoRoot] = status
-                self?.refreshingRoots.remove(repoRoot)
-                self?.publishSnapshot()
+                guard let self else { return }
+                self.refreshingRoots.remove(repoRoot)
 
-                if self?.pendingRefreshRoots.remove(repoRoot) != nil {
-                    self?.scheduleRefresh(for: repoRoot, delay: 1.0)
+                guard self.repositoryInfo(forRoot: repoRoot) != nil else {
+                    self.pendingRefreshRoots.remove(repoRoot)
+                    self.publishSnapshot()
+                    return
+                }
+
+                self.statusesByRoot[repoRoot] = status
+                self.publishSnapshot()
+
+                if self.pendingRefreshRoots.remove(repoRoot) != nil {
+                    self.scheduleRefresh(for: repoRoot, delay: 1.0)
                 }
             }
         }

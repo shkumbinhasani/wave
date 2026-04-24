@@ -3,9 +3,26 @@ import Combine
 import GhosttyKit
 
 class TerminalManager: ObservableObject {
+    private enum DefaultsKey {
+        static let gitIntegrationEnabled = "git.enabled"
+    }
+
     private var themeCancellable: AnyCancellable?
     private let gitRepositoryService: GitRepositoryService
     private let attentionMonitor = AttentionMonitor()
+    @Published var gitIntegrationEnabled: Bool = UserDefaults.standard.object(forKey: DefaultsKey.gitIntegrationEnabled) as? Bool ?? true {
+        didSet {
+            guard oldValue != gitIntegrationEnabled else { return }
+            UserDefaults.standard.set(gitIntegrationEnabled, forKey: DefaultsKey.gitIntegrationEnabled)
+            if gitIntegrationEnabled {
+                refreshGitMonitoring()
+            } else {
+                gitLookupsByPath = [:]
+                gitStatusesByRoot = [:]
+                gitRepositoryService.reset()
+            }
+        }
+    }
     @Published var sessions: [TerminalSession] = []
     @Published var selectedSessionID: UUID? {
         didSet {
@@ -99,8 +116,14 @@ class TerminalManager: ObservableObject {
         self.groupMeta = active.groupMeta
 
         gitRepositoryService.onSnapshot = { [weak self] lookups, statuses in
-            self?.gitLookupsByPath = lookups
-            self?.gitStatusesByRoot = statuses
+            guard let self else { return }
+            guard self.gitIntegrationEnabled else {
+                self.gitLookupsByPath = [:]
+                self.gitStatusesByRoot = [:]
+                return
+            }
+            self.gitLookupsByPath = lookups
+            self.gitStatusesByRoot = statuses
         }
         ghostty.onAction = { [weak self] target, action in
             self?.handleAction(target: target, action: action) ?? false
@@ -485,12 +508,14 @@ class TerminalManager: ObservableObject {
     }
 
     func gitRepositoryInfo(for path: String) -> GitRepositoryInfo? {
+        guard gitIntegrationEnabled else { return nil }
         let normalized = GitCLI.normalizePath(path)
         guard case let .repo(repository)? = gitLookupsByPath[normalized] else { return nil }
         return repository
     }
 
     func gitStatus(forGroupPath path: String) -> GitRepoStatus? {
+        guard gitIntegrationEnabled else { return nil }
         guard let repository = gitRepositoryInfo(for: path),
               let status = gitStatusesByRoot[repository.repoRoot],
               status.hasChanges else {
@@ -501,10 +526,12 @@ class TerminalManager: ObservableObject {
     }
 
     func gitStatus(forRepoRoot repoRoot: String) -> GitRepoStatus? {
-        gitStatusesByRoot[GitCLI.normalizePath(repoRoot)]
+        guard gitIntegrationEnabled else { return nil }
+        return gitStatusesByRoot[GitCLI.normalizePath(repoRoot)]
     }
 
     func refreshGitStatus(forRepoRoot repoRoot: String) {
+        guard gitIntegrationEnabled else { return }
         gitRepositoryService.refresh(repoRoot: repoRoot)
     }
 
@@ -685,6 +712,13 @@ class TerminalManager: ObservableObject {
     }
 
     private func refreshGitMonitoring() {
+        guard gitIntegrationEnabled else {
+            gitLookupsByPath = [:]
+            gitStatusesByRoot = [:]
+            gitRepositoryService.reset()
+            return
+        }
+
         // Active sessions + pinned paths from all profiles (for sidebar badges)
         var allPaths = sessions.compactMap(\.workingDirectory) + pinnedPaths
         for profile in profiles {
