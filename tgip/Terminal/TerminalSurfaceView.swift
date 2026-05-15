@@ -35,6 +35,7 @@ class TerminalSurfaceView: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.isOpaque = true
+        registerForDraggedTypes([.fileURL])
     }
 
     @available(*, unavailable)
@@ -428,6 +429,39 @@ class TerminalSurfaceView: NSView {
                                owner: self, userInfo: nil)
         addTrackingArea(a)
         trackingArea = a
+    }
+}
+
+// MARK: - File Drag & Drop
+
+extension TerminalSurfaceView {
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) else {
+            return []
+        }
+        return .copy
+    }
+
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let surface else { return false }
+        guard let urls = sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL] else {
+            return false
+        }
+        let paths = urls.map { shellEscape($0.path) }
+        let text = paths.joined(separator: " ")
+        guard !text.isEmpty else { return false }
+        text.withCString { ptr in
+            ghostty_surface_text(surface, ptr, UInt(text.utf8.count))
+        }
+        return true
+    }
+
+    private func shellEscape(_ path: String) -> String {
+        let special = CharacterSet(charactersIn: " \t\\\"'`$#!&|;(){}[]<>?*~")
+        if path.unicodeScalars.allSatisfy({ !special.contains($0) }) {
+            return path
+        }
+        return "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
 
