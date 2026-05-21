@@ -63,6 +63,8 @@ struct WindowConfigurator: NSViewRepresentable {
         }
     }
 
+    static let windowCornerRadius: CGFloat = 20
+
     private func configureWindow(for view: NSView) {
         guard let window = view.window else { return }
 
@@ -75,6 +77,13 @@ struct WindowConfigurator: NSViewRepresentable {
         window.isMovableByWindowBackground = true
         window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView])
         window.collectionBehavior.insert(.fullScreenPrimary)
+
+        if let contentView = window.contentView {
+            contentView.wantsLayer = true
+            contentView.layer?.cornerRadius = Self.windowCornerRadius
+            contentView.layer?.cornerCurve = .continuous
+            contentView.layer?.masksToBounds = true
+        }
 
         let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
         let nativeButtons = buttons.compactMap { window.standardWindowButton($0) }

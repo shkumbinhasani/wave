@@ -70,9 +70,11 @@ struct GitDiffInspector: View {
 
     let presentation: GitDiffPresentation
     let onClose: () -> Void
+    var cornerRadius: CGFloat = 10
 
-    init(presentation: GitDiffPresentation, onClose: @escaping () -> Void) {
+    init(presentation: GitDiffPresentation, cornerRadius: CGFloat = 10, onClose: @escaping () -> Void) {
         self.presentation = presentation
+        self.cornerRadius = cornerRadius
         self.onClose = onClose
         _loader = StateObject(wrappedValue: GitDiffLoader(repoRoot: presentation.repoRoot))
     }
@@ -131,9 +133,9 @@ struct GitDiffInspector: View {
                 )
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .strokeBorder(theme.adaptiveForeground(opacity: 0.14), lineWidth: 1)
         }
         .shadow(color: Color.black.opacity(0.10), radius: 20, y: 10)

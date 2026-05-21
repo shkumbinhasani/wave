@@ -12,6 +12,7 @@ struct ContentView: View {
     private let minSidebarWidth: CGFloat = 180
     private let maxSidebarWidth: CGFloat = 400
     private let outerPadding: CGFloat = 10
+    private var innerCornerRadius: CGFloat { WindowConfigurator.windowCornerRadius - outerPadding }
 
     var body: some View {
         ZStack {
@@ -41,6 +42,7 @@ struct ContentView: View {
                     if let presentedGitDiff {
                         GitDiffInspector(
                             presentation: presentedGitDiff,
+                            cornerRadius: innerCornerRadius,
                             onClose: {
                                 self.presentedGitDiff = nil
                                 refocusTerminal()
@@ -48,7 +50,7 @@ struct ContentView: View {
                         )
                         .environmentObject(manager)
                     } else {
-                        TerminalSurface(sessionID: manager.selectedSessionID)
+                        TerminalSurface(sessionID: manager.selectedSessionID, cornerRadius: innerCornerRadius)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1043,12 +1045,13 @@ struct TerminalSurface: View {
     @EnvironmentObject var manager: TerminalManager
     @ObservedObject private var theme = SidebarTheme.shared
     let sessionID: UUID?
+    var cornerRadius: CGFloat = 10
 
     var body: some View {
         TerminalView(sessionID: sessionID)
-            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(theme.adaptiveForeground(opacity: 0.14), lineWidth: 1)
             }
             .overlay(alignment: .topTrailing) {
