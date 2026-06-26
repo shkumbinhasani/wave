@@ -78,10 +78,13 @@ struct WindowConfigurator: NSViewRepresentable {
         window.styleMask.formUnion([.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView])
         window.collectionBehavior.insert(.fullScreenPrimary)
 
+        // Don't set a custom corner radius on the contentView. A `.titled` window
+        // is already clipped (and shadowed) by macOS at the system corner radius;
+        // overriding it with a larger radius leaves the native corner peeking out
+        // behind the custom one as a thin double-border crescent. Let the OS draw
+        // the single native corner.
         if let contentView = window.contentView {
             contentView.wantsLayer = true
-            contentView.layer?.cornerRadius = Self.windowCornerRadius
-            contentView.layer?.cornerCurve = .continuous
             contentView.layer?.masksToBounds = true
         }
 
