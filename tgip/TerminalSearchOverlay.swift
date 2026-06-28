@@ -1,7 +1,7 @@
 import SwiftUI
 
 private struct SearchOverlayButton: View {
-    @ObservedObject private var theme = SidebarTheme.shared
+    @Environment(SidebarTheme.self) private var theme
     let systemImage: String
     let isDisabled: Bool
     let action: () -> Void
@@ -25,7 +25,7 @@ private struct SearchOverlayButton: View {
 }
 
 struct TerminalSearchOverlay: View {
-    @ObservedObject private var theme = SidebarTheme.shared
+    @Environment(SidebarTheme.self) private var theme
     @Binding var query: String
     let totalMatches: Int?
     let selectedMatch: Int?

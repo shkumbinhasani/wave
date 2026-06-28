@@ -2,10 +2,9 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct ContentView: View {
-    @EnvironmentObject var manager: TerminalManager
-    @StateObject private var theme = SidebarTheme.shared
+    @Environment(TerminalManager.self) var manager
+    @Environment(SidebarTheme.self) private var theme
     @FocusState private var windowFocusActive: Bool
-    @State private var presentedGitDiff: GitDiffPresentation?
 
     @State private var sidebarWidth: CGFloat = 250
     @State private var sidebarHoverVisible: Bool = false
@@ -15,7 +14,8 @@ struct ContentView: View {
     private var innerCornerRadius: CGFloat { WindowConfigurator.windowCornerRadius - outerPadding }
 
     var body: some View {
-        ZStack {
+        @Bindable var manager = manager
+        return ZStack {
             ZStack {
                 // Blur layer — always present, controlled by blur slider
                 VisualEffectView(material: .hudWindow, blendingMode: .behindWindow, emphasized: false)
@@ -39,16 +39,13 @@ struct ContentView: View {
             ZStack(alignment: .leading) {
                 // Terminal or diff inspector fills the main pane
                 Group {
-                    if let presentedGitDiff {
+                    if let presentedGitDiff = manager.presentedGitDiff {
                         GitDiffInspector(
                             presentation: presentedGitDiff,
                             cornerRadius: innerCornerRadius,
-                            onClose: {
-                                self.presentedGitDiff = nil
-                                refocusTerminal()
-                            }
+                            onClose: { manager.closeGitDiff() }
                         )
-                        .environmentObject(manager)
+                        .environment(manager)
                     } else {
                         TerminalSurface(sessionID: manager.selectedSessionID, cornerRadius: innerCornerRadius)
                     }
@@ -60,13 +57,11 @@ struct ContentView: View {
                 if manager.sidebarPinned || sidebarHoverVisible {
                     DraggableContainer {
                         Sidebar(
+                            lightText: theme.lightText,
                             topInset: 46,
                             sidebarPinned: $manager.sidebarPinned,
                             onOpenGitDiff: { groupPath in
-                                guard manager.gitIntegrationEnabled,
-                                      let repository = manager.gitRepositoryInfo(for: groupPath) else { return }
-                                manager.closeSearch()
-                                presentedGitDiff = GitDiffPresentation(sourcePath: groupPath, repoRoot: repository.repoRoot)
+                                manager.openGitDiff(forGroupPath: groupPath)
                             }
                         )
                     }
@@ -142,15 +137,13 @@ struct ContentView: View {
                 windowFocusActive = true
             }
         }
-        .onReceive(manager.$selectedSessionID) { newValue in
+        .onChange(of: manager.selectedSessionID) { _, newValue in
             if newValue == nil {
                 windowFocusActive = true
             }
         }
         .onChange(of: manager.gitIntegrationEnabled) { _, enabled in
-            guard !enabled, presentedGitDiff != nil else { return }
-            presentedGitDiff = nil
-            refocusTerminal()
+            if !enabled { manager.closeGitDiff() }
         }
         .onKeyPress(.upArrow) {
             if manager.focusedGroupIndex != nil { manager.moveFocusUp(); return .handled }
@@ -172,70 +165,13 @@ struct ContentView: View {
                 manager.closeSearch()
                 return .handled
             }
-            if presentedGitDiff != nil {
-                presentedGitDiff = nil
-                refocusTerminal()
+            if manager.presentedGitDiff != nil {
+                manager.closeGitDiff()
                 return .handled
             }
             if manager.focusedGroupIndex != nil { manager.cancelFocus(); return .handled }
             return .ignored
         }
-        .background {
-            VStack {
-                Button("Find") {
-                    if presentedGitDiff == nil {
-                        manager.showSearch()
-                    }
-                }
-                .keyboardShortcut("f", modifiers: .command)
-
-                Button("Find Next") {
-                    if presentedGitDiff == nil {
-                        manager.navigateSearch(.next)
-                    }
-                }
-                .keyboardShortcut("g", modifiers: .command)
-
-                Button("Find Previous") {
-                    if presentedGitDiff == nil {
-                        manager.navigateSearch(.previous)
-                    }
-                }
-                .keyboardShortcut("g", modifiers: [.command, .shift])
-
-                Button("Toggle Git Diff") {
-                    toggleGitDiff()
-                }
-                .keyboardShortcut("d", modifiers: [.command, .shift])
-                .disabled(!manager.gitIntegrationEnabled)
-            }
-            .hidden()
-        }
-    }
-
-    private func refocusTerminal() {
-        // Re-select the current session to trigger the terminal surface to become first responder
-        let current = manager.selectedSessionID
-        manager.selectedSessionID = nil
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            manager.selectedSessionID = current
-        }
-    }
-
-    private func toggleGitDiff() {
-        if presentedGitDiff != nil {
-            presentedGitDiff = nil
-            refocusTerminal()
-            return
-        }
-        guard manager.gitIntegrationEnabled else { return }
-        guard let session = manager.sessions.first(where: { $0.id == manager.selectedSessionID }),
-              let dir = session.workingDirectory,
-              let repo = manager.gitRepositoryInfo(for: dir) else {
-            return
-        }
-        manager.closeSearch()
-        presentedGitDiff = GitDiffPresentation(sourcePath: dir, repoRoot: repo.repoRoot)
     }
 
     /// The same group list the sidebar uses — needed for confirmFocus.
@@ -272,26 +208,33 @@ func buildGroups(
 // MARK: - Sidebar
 
 struct Sidebar: View {
-    @EnvironmentObject var manager: TerminalManager
-    @ObservedObject private var theme = SidebarTheme.shared
+    @Environment(TerminalManager.self) var manager
+    // Text mode is threaded in from ContentView (the main tree) rather than read
+    // from the theme here. The whole sidebar lives in DraggableContainer's detached
+    // NSHostingView, which re-runs view bodies on a theme change but only repaints
+    // structural/input changes — a self-observed color change left tab text stale
+    // until a hover. Passing lightText as an input makes the recolor a structural
+    // change the host paints, with no full-subtree recreation. See foreground().
+    let lightText: Bool
     @State private var showThemeEditor = false
-    @State private var scrolledProfileID: UUID?
     var topInset: CGFloat = 0
     @Binding var sidebarPinned: Bool
     var onOpenGitDiff: (String) -> Void
 
     init(
+        lightText: Bool,
         topInset: CGFloat = 0,
         sidebarPinned: Binding<Bool> = .constant(true),
         onOpenGitDiff: @escaping (String) -> Void = { _ in }
     ) {
+        self.lightText = lightText
         self.topInset = topInset
         self._sidebarPinned = sidebarPinned
         self.onOpenGitDiff = onOpenGitDiff
     }
 
-    private var activeGroups: [(fullPath: String, sessions: [TerminalSession])] {
-        buildGroups(sessions: manager.sessions, pinned: manager.pinnedPaths)
+    private func foreground(_ opacity: Double) -> Color {
+        SidebarTheme.adaptiveForeground(lightText: lightText, opacity: opacity)
     }
 
     var body: some View {
@@ -307,7 +250,7 @@ struct Sidebar: View {
                 } label: {
                     Image(systemName: "sidebar.left")
                         .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(theme.adaptiveForeground(opacity: sidebarPinned ? 0.5 : 0.35))
+                        .foregroundStyle(foreground(sidebarPinned ? 0.5 : 0.35))
                 }
                 .buttonStyle(.plain)
                 .help(sidebarPinned ? "Hide Sidebar" : "Pin Sidebar")
@@ -319,51 +262,39 @@ struct Sidebar: View {
             .padding(.bottom, 2)
 
             // Groups — horizontally paginated per profile
-            ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 0) {
-                    ForEach(manager.profiles) { profile in
-                        profilePage(profile)
-                            .containerRelativeFrame(.horizontal)
-                    }
+            // AppKit-backed pager: each page renders once into a cached layer; the
+            // swipe just translates layers (GPU), so paging stays smooth no matter
+            // how heavy a page is. SwiftUI re-renders a page only on data changes.
+            ProfilePager(
+                pageCount: manager.profiles.count,
+                activeIndex: manager.activeProfileIndex,
+                makePage: { index in
+                    AnyView(profilePage(manager.profiles[index]).environment(manager))
+                },
+                onSwitch: { index in
+                    guard index != manager.activeProfileIndex else { return }
+                    manager.switchToProfile(index, direction: index > manager.activeProfileIndex ? .forward : .backward)
                 }
-                .scrollTargetLayout()
-            }
-            .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
-            .scrollPosition(id: $scrolledProfileID)
-            .onAppear {
-                scrolledProfileID = manager.activeProfile.id
-            }
-            .onChange(of: scrolledProfileID) { _, newID in
-                guard let newID,
-                      let index = manager.profiles.firstIndex(where: { $0.id == newID }),
-                      index != manager.activeProfileIndex else { return }
-                manager.switchToProfile(index, direction: index > manager.activeProfileIndex ? .forward : .backward)
-            }
-            .onChange(of: manager.activeProfileIndex) { _, newIndex in
-                let targetID = manager.profiles[newIndex].id
-                guard scrolledProfileID != targetID else { return }
-                withAnimation(.easeInOut(duration: 0.3)) {
-                    scrolledProfileID = targetID
-                }
-            }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
             // Bottom bar
             HStack(spacing: 0) {
                 Text("\(manager.sessions.count)")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(theme.adaptiveForeground(opacity: 0.3))
+                    .foregroundStyle(foreground(0.3))
                     .frame(width: 30, alignment: .center)
 
                 Spacer()
 
-                ProfileBar()
+                ProfileBar(lightText: lightText)
 
                 Spacer()
 
                 Button(action: { manager.createSession() }) {
                     Image(systemName: "plus")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(theme.adaptiveForeground(opacity: 0.5))
+                        .foregroundStyle(foreground(0.5))
                         .frame(width: 30, height: 30)
                 }
                 .buttonStyle(.plain)
@@ -396,7 +327,7 @@ struct Sidebar: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 2) {
                 let profileGroups = isActive
-                    ? activeGroups
+                    ? buildGroups(sessions: manager.sessions, pinned: manager.pinnedPaths)
                     : buildGroups(sessions: manager.sessionsForProfile(at: index), pinned: profile.pinnedPaths)
                 let labels = disambiguatedLabels(for: profileGroups.map { $0.fullPath })
 
@@ -404,6 +335,7 @@ struct Sidebar: View {
                     if isActive {
                         let isFocused = manager.focusedGroupIndex == groupIndex
                         DirectoryGroup(
+                            lightText: lightText,
                             directory: labels[group.fullPath] ?? group.fullPath,
                             fullPath: group.fullPath,
                             sessions: group.sessions,
@@ -418,7 +350,8 @@ struct Sidebar: View {
                             sessions: group.sessions,
                             meta: meta,
                             label: meta.displayName ?? (labels[group.fullPath] ?? group.fullPath),
-                            gitStatus: manager.gitStatusForProfile(at: index, groupPath: group.fullPath)
+                            gitStatus: manager.gitStatusForProfile(at: index, groupPath: group.fullPath),
+                            lightText: profile.lightText
                         )
                     }
 
@@ -472,23 +405,29 @@ struct Sidebar: View {
 // MARK: - Inactive profile group (read-only preview)
 
 struct InactiveGroupRow: View {
-    @ObservedObject private var theme = SidebarTheme.shared
     let sessions: [TerminalSession]
     let meta: GroupMeta
     let label: String
     var gitStatus: GitRepoStatus?
+    /// This profile's text mode — so the page renders in its own colors while
+    /// swiping, rather than borrowing the live (active) profile's colors.
+    var lightText: Bool = true
+
+    private func foreground(_ opacity: Double) -> Color {
+        SidebarTheme.adaptiveForeground(lightText: lightText, opacity: opacity)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
-                GroupIcon(meta: meta, opacity: 0.4)
+                GroupIcon(meta: meta, opacity: 0.4, lightText: lightText)
                 Text(label)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(theme.adaptiveForeground(opacity: 0.45))
+                    .foregroundStyle(foreground(0.45))
                     .lineLimit(1)
                 Spacer()
                 if let gitStatus {
-                    RepoDirtyBadge(status: gitStatus, isFocused: false)
+                    RepoDirtyBadge(lightText: lightText, status: gitStatus, isFocused: false)
                         .opacity(0.6)
                 }
             }
@@ -502,7 +441,7 @@ struct InactiveGroupRow: View {
                         .frame(width: 6, height: 6)
                     Text(session.title)
                         .font(.system(size: 14))
-                        .foregroundStyle(theme.adaptiveForeground(opacity: 0.4))
+                        .foregroundStyle(foreground(0.4))
                         .lineLimit(1)
                     Spacer()
                 }
@@ -517,8 +456,11 @@ struct InactiveGroupRow: View {
 // MARK: - Directory Group
 
 struct DirectoryGroup: View {
-    @EnvironmentObject var manager: TerminalManager
-    @ObservedObject private var theme = SidebarTheme.shared
+    @Environment(TerminalManager.self) var manager
+    let lightText: Bool
+    private func foreground(_ opacity: Double) -> Color {
+        SidebarTheme.adaptiveForeground(lightText: lightText, opacity: opacity)
+    }
     let directory: String
     let fullPath: String
     let sessions: [TerminalSession]
@@ -542,11 +484,11 @@ struct DirectoryGroup: View {
         VStack(alignment: .leading, spacing: 3) {
             // Group header
             HStack(spacing: 8) {
-                GroupIcon(meta: meta, opacity: isFocused ? 0.85 : 0.55)
+                GroupIcon(meta: meta, opacity: isFocused ? 0.85 : 0.55, lightText: lightText)
 
                 Text(label)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(theme.adaptiveForeground(opacity: isFocused ? 0.9 : 0.65))
+                    .foregroundStyle(foreground(isFocused ? 0.9 : 0.65))
                     .lineLimit(1)
 
                 Spacer()
@@ -555,7 +497,7 @@ struct DirectoryGroup: View {
                     Button {
                         onOpenGitDiff(fullPath)
                     } label: {
-                        RepoDirtyBadge(status: gitStatus, isFocused: isFocused)
+                        RepoDirtyBadge(lightText: lightText, status: gitStatus, isFocused: isFocused)
                     }
                     .buttonStyle(.plain)
                     .help("Open uncommitted diff")
@@ -564,12 +506,12 @@ struct DirectoryGroup: View {
                 if groupIndex < 9 {
                     Text("\u{2318}\(groupIndex + 1)")
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(theme.adaptiveForeground(opacity: isFocused ? 0.55 : 0.3))
+                        .foregroundStyle(foreground(isFocused ? 0.55 : 0.3))
                         .padding(.horizontal, 5)
                         .padding(.vertical, 2)
                         .background(
                             RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(theme.adaptiveForeground(opacity: isFocused ? 0.12 : 0.04))
+                                .fill(foreground(isFocused ? 0.12 : 0.04))
                         )
                 }
             }
@@ -577,7 +519,7 @@ struct DirectoryGroup: View {
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isFocused ? theme.adaptiveForeground(opacity: 0.08) : Color.clear)
+                    .fill(isFocused ? foreground(0.08) : Color.clear)
             )
             .contentShape(Rectangle())
             .onTapGesture {
@@ -655,7 +597,7 @@ struct DirectoryGroup: View {
             } else {
                 ForEach(Array(sessions.enumerated()), id: \.element.id) { tabIndex, session in
                     let isTabFocused = isFocused && focusedTabOffset == tabIndex
-                    TabRow(session: session, directory: fullPath, isTabFocused: isTabFocused, isLast: tabIndex == sessions.count - 1)
+                    TabRow(lightText: lightText, session: session, directory: fullPath, isTabFocused: isTabFocused, isLast: tabIndex == sessions.count - 1)
                 }
 
             }
@@ -672,9 +614,12 @@ enum DragState {
 }
 
 struct TabRow: View {
-    @EnvironmentObject var manager: TerminalManager
-    @ObservedObject private var theme = SidebarTheme.shared
-    @ObservedObject var session: TerminalSession
+    @Environment(TerminalManager.self) var manager
+    let lightText: Bool
+    private func foreground(_ opacity: Double) -> Color {
+        SidebarTheme.adaptiveForeground(lightText: lightText, opacity: opacity)
+    }
+    var session: TerminalSession
     let directory: String
     var isTabFocused: Bool = false
     var isLast: Bool = false
@@ -713,7 +658,7 @@ struct TabRow: View {
 
                 Text(session.title)
                     .font(.system(size: 14, weight: isSelected ? .medium : .regular))
-                    .foregroundStyle(theme.adaptiveForeground(opacity: isSelected ? 0.95 : 0.75))
+                    .foregroundStyle(foreground(isSelected ? 0.95 : 0.75))
                     .lineLimit(1)
 
                 Spacer()
@@ -722,10 +667,10 @@ struct TabRow: View {
                     Button(action: { manager.closeSession(session) }) {
                         Image(systemName: "xmark")
                             .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(theme.adaptiveForeground(opacity: 0.35))
+                            .foregroundStyle(foreground(0.35))
                             .frame(width: 16, height: 16)
                             .background(
-                                Circle().fill(theme.adaptiveForeground(opacity: hovering ? 0.1 : 0))
+                                Circle().fill(foreground(hovering ? 0.1 : 0))
                             )
                     }
                     .buttonStyle(.plain)
@@ -738,8 +683,8 @@ struct TabRow: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(
                         session.needsAttention ? Color.orange.opacity(attentionPulse ? 0.14 : 0.06) :
-                        isSelected ? theme.adaptiveForeground(opacity: 0.12) :
-                        (hovering || isTabFocused) ? theme.adaptiveForeground(opacity: 0.06) :
+                        isSelected ? foreground(0.12) :
+                        (hovering || isTabFocused) ? foreground(0.06) :
                         Color.clear
                     )
             )
@@ -807,20 +752,12 @@ struct TabDropDelegate: DropDelegate {
             return DropProposal(operation: .move)
         }
 
-        // On the last tab, bottom half means "after" instead of "before"
+        // Only update the drop indicator here — the actual reorder happens on
+        // drop. dropUpdated fires continuously on hover, so mutating the model
+        // here would thrash the session list on every pointer move.
         let atEnd = isLast && info.location.y > 20
         if atEnd != dropAtEnd {
             dropAtEnd = atEnd
-        }
-
-        if atEnd {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                manager.moveSessionToEndOfGroup(draggedID, in: directory)
-            }
-        } else {
-            withAnimation(.easeInOut(duration: 0.2)) {
-                manager.moveSession(draggedID, before: targetSession.id, in: directory)
-            }
         }
 
         return DropProposal(operation: .move)
@@ -836,9 +773,22 @@ struct TabDropDelegate: DropDelegate {
     }
 
     func performDrop(info: DropInfo) -> Bool {
-        isTargeted = false
-        dropAtEnd = false
-        DragState.draggedSessionID = nil
+        let landAtEnd = dropAtEnd
+        defer {
+            isTargeted = false
+            dropAtEnd = false
+            DragState.draggedSessionID = nil
+        }
+        guard let draggedID = DragState.draggedSessionID,
+              draggedID != targetSession.id else { return true }
+
+        withAnimation(.easeInOut(duration: 0.2)) {
+            if landAtEnd {
+                manager.moveSessionToEndOfGroup(draggedID, in: directory)
+            } else {
+                manager.moveSession(draggedID, before: targetSession.id, in: directory)
+            }
+        }
         return true
     }
 }
@@ -876,9 +826,14 @@ struct GroupDropDelegate: DropDelegate {
 }
 
 struct GroupIcon: View {
-    @ObservedObject private var theme = SidebarTheme.shared
     let meta: GroupMeta
     var opacity: Double = 0.55
+    /// Text mode threaded in so the icon recolors inside the detached host.
+    let lightText: Bool
+
+    private var iconColor: Color {
+        SidebarTheme.adaptiveForeground(lightText: lightText, opacity: opacity)
+    }
 
     var body: some View {
         Group {
@@ -890,7 +845,7 @@ struct GroupIcon: View {
             } else {
                 Image(systemName: meta.icon)
                     .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(theme.adaptiveForeground(opacity: opacity))
+                    .foregroundStyle(iconColor)
             }
         }
         .frame(width: 20, height: 20)
@@ -901,8 +856,11 @@ struct GroupIcon: View {
 // MARK: - Profile Bar
 
 struct ProfileBar: View {
-    @EnvironmentObject var manager: TerminalManager
-    @ObservedObject private var theme = SidebarTheme.shared
+    @Environment(TerminalManager.self) var manager
+    let lightText: Bool
+    private func foreground(_ opacity: Double) -> Color {
+        SidebarTheme.adaptiveForeground(lightText: lightText, opacity: opacity)
+    }
     @State private var hoveredIndex: Int?
 
     @State private var scrolledActiveID: UUID?
@@ -915,13 +873,17 @@ struct ProfileBar: View {
                     let isActive = index == manager.activeProfileIndex
                     Button(action: { withAnimation(.easeInOut(duration: 0.25)) { manager.switchToProfile(index) } }) {
                         Image(systemName: profile.icon)
-                            .font(.system(size: isActive ? 14 : 11, weight: .medium))
-                            .foregroundStyle(theme.adaptiveForeground(
-                                opacity: isActive
-                                    ? (hoveredIndex == index ? 0.9 : 0.7)
-                                    : (hoveredIndex == index ? 0.55 : 0.35)
+                            // Same size for every profile — the active one is marked by a
+                            // subtle pill behind it, not by scaling up (Arc-style).
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(foreground(
+                                isActive ? 0.95 : (hoveredIndex == index ? 0.6 : 0.4)
                             ))
-                            .frame(width: 24, height: 24)
+                            .frame(width: 30, height: 26)
+                            .background(
+                                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                    .fill(foreground(isActive ? 0.13 : (hoveredIndex == index ? 0.06 : 0)))
+                            )
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -1018,21 +980,17 @@ struct ProfileBar: View {
             .frame(minWidth: barWidth)
         }
         .scrollPosition(id: $scrolledActiveID, anchor: .center)
-        .background(GeometryReader { geo in
-            Color.clear.onAppear { barWidth = geo.size.width }
-                .onChange(of: geo.size.width) { _, w in barWidth = w }
-        })
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { width in
+            barWidth = width
+        }
         .onAppear { scrolledActiveID = manager.activeProfile.id }
         .onChange(of: manager.activeProfileIndex) { _, _ in
             withAnimation(.easeInOut(duration: 0.2)) {
                 scrolledActiveID = manager.activeProfile.id
             }
         }
-        .background(
-            Capsule()
-                .fill(theme.adaptiveForeground(opacity: 0.04))
-        )
-        .clipShape(Capsule())
         .contextMenu {
             Button("Add New Profile") {
                 manager.addProfile()
@@ -1042,8 +1000,8 @@ struct ProfileBar: View {
 }
 
 struct TerminalSurface: View {
-    @EnvironmentObject var manager: TerminalManager
-    @ObservedObject private var theme = SidebarTheme.shared
+    @Environment(TerminalManager.self) var manager
+    @Environment(SidebarTheme.self) private var theme
     let sessionID: UUID?
     var cornerRadius: CGFloat = 10
 

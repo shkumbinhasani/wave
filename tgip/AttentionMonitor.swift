@@ -160,10 +160,16 @@ final class AttentionMonitor {
                 }
             }
 
-            // Extract cwd from JSON (first non-empty line that looks like JSON)
+            // Extract cwd from the hook JSON. Everything except the WAVE_SID
+            // trailer is the JSON payload, which may be pretty-printed across
+            // multiple lines — so reassemble and parse the whole buffer rather
+            // than a single line.
             var cwd: String?
-            if let jsonLine = lines.first(where: { $0.hasPrefix("{") }),
-               let jsonData = jsonLine.data(using: .utf8),
+            let jsonText = lines
+                .filter { !$0.hasPrefix("WAVE_SID=") }
+                .joined(separator: "\n")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let jsonData = jsonText.data(using: .utf8),
                let json = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] {
                 cwd = json["cwd"] as? String
             }

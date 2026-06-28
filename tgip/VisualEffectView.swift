@@ -27,6 +27,9 @@ struct WindowConfigurator: NSViewRepresentable {
     final class Coordinator {
         weak var window: NSWindow?
         var observers: [NSObjectProtocol] = []
+        /// One-time window styling guard — avoids re-running configureWindow
+        /// on every SwiftUI update pass.
+        var didConfigure = false
 
         deinit {
             removeObservers()
@@ -47,20 +50,25 @@ struct WindowConfigurator: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSView {
         let view = NSView()
+        let coordinator = context.coordinator
         DispatchQueue.main.async {
+            guard view.window != nil, !coordinator.didConfigure else { return }
+            coordinator.didConfigure = true
             configureWindow(for: view)
         }
         return view
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async {
+        guard let window = nsView.window else { return }
+
+        // Style the window once, not on every update pass.
+        if !context.coordinator.didConfigure {
+            context.coordinator.didConfigure = true
             configureWindow(for: nsView)
         }
 
-        if let window = nsView.window {
-            registerObservers(for: window, coordinator: context.coordinator)
-        }
+        registerObservers(for: window, coordinator: context.coordinator)
     }
 
     static let windowCornerRadius: CGFloat = 20

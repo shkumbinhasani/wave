@@ -1,14 +1,17 @@
 import Foundation
+import Observation
 
-class TerminalSession: Identifiable, ObservableObject {
+@Observable
+final class TerminalSession: Identifiable {
     let id = UUID()
-    @Published var title: String
-    @Published var workingDirectory: String?
-    @Published var isRunning: Bool = true
-    @Published var needsAttention: Bool = false
+    var title: String
+    var workingDirectory: String?
+    var isRunning: Bool = true
+    var needsAttention: Bool = false
 
     /// Strong reference — the view lives as long as the session.
-    var surfaceView: TerminalSurfaceView?
+    /// Excluded from observation: it's an AppKit view handle, not view-driving state.
+    @ObservationIgnored var surfaceView: TerminalSurfaceView?
 
     init(title: String = "Terminal") {
         self.title = title

@@ -1,16 +1,16 @@
 import SwiftUI
-import Combine
 import GhosttyKit
+import Observation
 
-class TerminalManager: ObservableObject {
+@Observable
+final class TerminalManager {
     private enum DefaultsKey {
         static let gitIntegrationEnabled = "git.enabled"
     }
 
-    private var themeCancellable: AnyCancellable?
-    private let gitRepositoryService: GitRepositoryService
-    private let attentionMonitor = AttentionMonitor()
-    @Published var gitIntegrationEnabled: Bool = UserDefaults.standard.object(forKey: DefaultsKey.gitIntegrationEnabled) as? Bool ?? true {
+    @ObservationIgnored private let gitRepositoryService: GitRepositoryService
+    @ObservationIgnored private let attentionMonitor = AttentionMonitor()
+    var gitIntegrationEnabled: Bool = UserDefaults.standard.object(forKey: DefaultsKey.gitIntegrationEnabled) as? Bool ?? true {
         didSet {
             guard oldValue != gitIntegrationEnabled else { return }
             UserDefaults.standard.set(gitIntegrationEnabled, forKey: DefaultsKey.gitIntegrationEnabled)
@@ -23,8 +23,8 @@ class TerminalManager: ObservableObject {
             }
         }
     }
-    @Published var sessions: [TerminalSession] = []
-    @Published var selectedSessionID: UUID? {
+    var sessions: [TerminalSession] = []
+    var selectedSessionID: UUID? {
         didSet {
             if let selectedSessionID { clearAttention(for: selectedSessionID) }
             if oldValue != selectedSessionID {
@@ -37,10 +37,10 @@ class TerminalManager: ObservableObject {
 
     enum ProfileSwitchDirection { case forward, backward }
 
-    @Published var profiles: [Profile] = []
-    @Published var activeProfileIndex: Int = 0
+    var profiles: [Profile] = []
+    var activeProfileIndex: Int = 0
     /// Direction of the last profile switch — drives slide animation.
-    @Published var profileSwitchDirection: ProfileSwitchDirection = .forward
+    var profileSwitchDirection: ProfileSwitchDirection = .forward
     /// Per-profile session storage (kept alive while profile is inactive).
     private var storedSessions: [UUID: [TerminalSession]] = [:]
     /// Per-profile selected session.
@@ -53,7 +53,7 @@ class TerminalManager: ObservableObject {
     }
 
     /// Pinned directory paths — always shown in sidebar, persisted via profile.
-    @Published var pinnedPaths: [String] = [] {
+    var pinnedPaths: [String] = [] {
         didSet {
             guard !isSwitchingProfile, profiles.indices.contains(activeProfileIndex) else { return }
             profiles[activeProfileIndex].pinnedPaths = pinnedPaths
@@ -62,7 +62,7 @@ class TerminalManager: ObservableObject {
     }
 
     /// Per-group metadata (icon, display name). Keyed by absolute path.
-    @Published var groupMeta: [String: GroupMeta] = [:] {
+    var groupMeta: [String: GroupMeta] = [:] {
         didSet {
             guard !isSwitchingProfile, profiles.indices.contains(activeProfileIndex) else { return }
             profiles[activeProfileIndex].groupMeta = groupMeta
@@ -70,16 +70,18 @@ class TerminalManager: ObservableObject {
         }
     }
 
-    @Published var sidebarPinned: Bool = true
+    var sidebarPinned: Bool = true
 
     /// Which group index is keyboard-focused (nil = none). Set by Cmd+N.
-    @Published var focusedGroupIndex: Int?
+    var focusedGroupIndex: Int?
     /// Which tab within the focused group is highlighted. Arrow keys move this.
-    @Published var focusedTabOffset: Int = 0
-    @Published var searchState: TerminalSearchState?
-    @Published var searchFocusToken: Int = 0
-    @Published private(set) var gitLookupsByPath: [String: GitPathLookup] = [:]
-    @Published private(set) var gitStatusesByRoot: [String: GitRepoStatus] = [:]
+    var focusedTabOffset: Int = 0
+    var searchState: TerminalSearchState?
+    var searchFocusToken: Int = 0
+    /// The uncommitted-diff inspector currently shown in the main pane (nil = terminal).
+    var presentedGitDiff: GitDiffPresentation?
+    private(set) var gitLookupsByPath: [String: GitPathLookup] = [:]
+    private(set) var gitStatusesByRoot: [String: GitRepoStatus] = [:]
 
     let ghostty: GhosttyRuntime
 
@@ -139,11 +141,9 @@ class TerminalManager: ObservableObject {
         let theme = SidebarTheme.shared
         theme.apply(from: active)
         ghostty.setColorScheme(dark: theme.brightness < 0.5)
-        themeCancellable = theme.$brightness
-            .removeDuplicates()
-            .sink { [weak self] val in
-                self?.ghostty.setColorScheme(dark: val < 0.5)
-            }
+        theme.onBrightnessChanged = { [weak self] val in
+            self?.ghostty.setColorScheme(dark: val < 0.5)
+        }
 
         // Persist theme edits back to the active profile
         theme.onThemeChanged = { [weak self] in
@@ -584,6 +584,46 @@ class TerminalManager: ObservableObject {
         clearSearchState(for: state.sessionID)
     }
 
+    // MARK: - Git Diff Inspector
+
+    /// Toggle the uncommitted-diff inspector for the selected session's repo.
+    func toggleGitDiff() {
+        if presentedGitDiff != nil {
+            presentedGitDiff = nil
+            refocusTerminal()
+            return
+        }
+        guard gitIntegrationEnabled,
+              let dir = selectedSession?.workingDirectory,
+              let repo = gitRepositoryInfo(for: dir) else {
+            return
+        }
+        closeSearch()
+        presentedGitDiff = GitDiffPresentation(sourcePath: dir, repoRoot: repo.repoRoot)
+    }
+
+    /// Open the uncommitted-diff inspector for a specific group path.
+    func openGitDiff(forGroupPath groupPath: String) {
+        guard gitIntegrationEnabled,
+              let repo = gitRepositoryInfo(for: groupPath) else { return }
+        closeSearch()
+        presentedGitDiff = GitDiffPresentation(sourcePath: groupPath, repoRoot: repo.repoRoot)
+    }
+
+    func closeGitDiff() {
+        guard presentedGitDiff != nil else { return }
+        presentedGitDiff = nil
+        refocusTerminal()
+    }
+
+    /// Make the selected session's terminal surface first responder.
+    func refocusTerminal() {
+        guard let view = selectedSession?.surfaceView else { return }
+        DispatchQueue.main.async {
+            view.window?.makeFirstResponder(view)
+        }
+    }
+
     // MARK: - Attention
 
     private func handleAttention(sessionID: UUID?, cwd: String?) {
@@ -651,8 +691,10 @@ class TerminalManager: ObservableObject {
             let pwd = String(cString: action.action.pwd.pwd)
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
+                // Under @Observable, views that read `session.workingDirectory`
+                // (and `manager.sessions`) re-render automatically — no manual
+                // invalidation needed.
                 session.workingDirectory = pwd
-                self.objectWillChange.send()
                 self.refreshGitMonitoring()
             }
             return true

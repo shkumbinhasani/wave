@@ -9,7 +9,9 @@ struct GitDiffPresentation: Identifiable, Equatable {
 }
 
 struct RepoDirtyBadge: View {
-    @ObservedObject private var theme = SidebarTheme.shared
+    // lightText threaded in: rendered in the sidebar's detached NSHostingView, where a
+    // self-observed theme change doesn't repaint — see note in Sidebar.
+    let lightText: Bool
     let status: GitRepoStatus
     var isFocused: Bool
 
@@ -29,13 +31,13 @@ struct RepoDirtyBadge: View {
         )
         .overlay {
             Capsule(style: .continuous)
-                .strokeBorder(theme.adaptiveForeground(opacity: isFocused ? 0.14 : 0.08), lineWidth: 1)
+                .strokeBorder(SidebarTheme.adaptiveForeground(lightText: lightText, opacity: isFocused ? 0.14 : 0.08), lineWidth: 1)
         }
     }
 }
 
 private struct InspectorButton: View {
-    @ObservedObject private var theme = SidebarTheme.shared
+    @Environment(SidebarTheme.self) private var theme
     let label: String
     let icon: String
     let action: () -> Void
@@ -63,8 +65,8 @@ private struct InspectorButton: View {
 }
 
 struct GitDiffInspector: View {
-    @EnvironmentObject var manager: TerminalManager
-    @ObservedObject private var theme = SidebarTheme.shared
+    @Environment(TerminalManager.self) var manager
+    @Environment(SidebarTheme.self) private var theme
     @StateObject private var loader: GitDiffLoader
     @FocusState private var isFocused: Bool
 
@@ -370,7 +372,7 @@ struct GitDiffInspector: View {
 }
 
 private struct GitChangedFileRow: View {
-    @ObservedObject private var theme = SidebarTheme.shared
+    @Environment(SidebarTheme.self) private var theme
     let file: GitChangedFile
     let isSelected: Bool
     let action: () -> Void
@@ -423,7 +425,7 @@ private struct GitChangedFileRow: View {
 }
 
 private struct GitInspectorEmptyState: View {
-    @ObservedObject private var theme = SidebarTheme.shared
+    @Environment(SidebarTheme.self) private var theme
     let title: String
     let message: String
 
@@ -638,124 +640,10 @@ private struct GitDiffPayload {
     let document: GitDiffDocument
 }
 
-struct GitDiffDocument: Equatable {
-    let lines: [GitDiffRenderedLine]
-    let longestLineLength: Int
-
-    static let empty = GitDiffDocument(lines: [], longestLineLength: 0)
-
-    init(lines: [GitDiffRenderedLine], longestLineLength: Int? = nil) {
-        self.lines = lines
-        self.longestLineLength = longestLineLength ?? lines.map { $0.text.count }.max() ?? 0
-    }
-
-    static func fromSections(_ sections: [GitDiffSection]) -> GitDiffDocument {
-        guard !sections.isEmpty else { return .empty }
-
-        var lines: [GitDiffRenderedLine] = []
-        lines.reserveCapacity(sections.reduce(0) { $0 + $1.contentLines.count + 2 })
-        var nextID = 0
-
-        func append(_ text: String, kind: GitDiffRenderedLineKind) {
-            lines.append(GitDiffRenderedLine(id: nextID, text: text, kind: kind))
-            nextID += 1
-        }
-
-        for (index, section) in sections.enumerated() {
-            append(section.title, kind: .sectionHeader)
-            if section.contentLines.isEmpty {
-                append("No patch lines available.", kind: .note)
-            } else {
-                for rawLine in section.contentLines {
-                    append(rawLine, kind: GitDiffRenderedLineKind(rawLine: rawLine))
-                }
-            }
-
-            if index < sections.count - 1 {
-                append("", kind: .spacer)
-            }
-        }
-
-        return GitDiffDocument(lines: lines)
-    }
-
-    static func note(_ message: String) -> GitDiffDocument {
-        let rows = message
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .enumerated()
-            .map { index, line in
-                GitDiffRenderedLine(id: index, text: String(line), kind: .note)
-            }
-        return GitDiffDocument(lines: rows)
-    }
-}
-
-struct GitDiffRenderedLine: Identifiable, Equatable {
-    let id: Int
-    let text: String
-    let kind: GitDiffRenderedLineKind
-
-    var marker: String {
-        kind.marker(for: text)
-    }
-}
-
-enum GitDiffRenderedLineKind: Equatable {
-    case sectionHeader
-    case fileHeader
-    case meta
-    case hunk
-    case addition
-    case deletion
-    case context
-    case note
-    case spacer
-
-    init(rawLine: String) {
-        if rawLine.hasPrefix("diff --git") {
-            self = .fileHeader
-        } else if rawLine.hasPrefix("@@") {
-            self = .hunk
-        } else if rawLine.hasPrefix("+++") {
-            self = .addition
-        } else if rawLine.hasPrefix("---") {
-            self = .deletion
-        } else if rawLine.hasPrefix("+") {
-            self = .addition
-        } else if rawLine.hasPrefix("-") {
-            self = .deletion
-        } else if rawLine.hasPrefix("index ") ||
-                    rawLine.hasPrefix("new file mode ") ||
-                    rawLine.hasPrefix("deleted file mode ") ||
-                    rawLine.hasPrefix("similarity index ") ||
-                    rawLine.hasPrefix("rename from ") ||
-                    rawLine.hasPrefix("rename to ") ||
-                    rawLine.hasPrefix("Binary files ") {
-            self = .meta
-        } else if rawLine.isEmpty {
-            self = .context
-        } else {
-            self = .context
-        }
-    }
-
-    var rowHeight: CGFloat {
-        switch self {
-        case .sectionHeader: return 28
-        case .spacer: return 10
-        case .note: return 24
-        default: return 22
-        }
-    }
-
-    var showsMarker: Bool {
-        self != .sectionHeader && self != .spacer
-    }
-
-    var usesEmphasis: Bool {
-        self == .sectionHeader || self == .fileHeader || self == .hunk
-    }
-
+// AppKit styling for each diff line kind. The kind itself and its pure
+// classification/layout live in GitDiffModel.swift; colors stay here because
+// they pull in AppKit.
+extension GitDiffRenderedLineKind {
     var backgroundColor: NSColor {
         switch self {
         case .sectionHeader:
@@ -821,28 +709,6 @@ enum GitDiffRenderedLineKind: Equatable {
         case .sectionHeader, .spacer:
             return .clear
         }
-    }
-
-    func marker(for text: String) -> String {
-        switch self {
-        case .addition: return text.hasPrefix("+++") ? "++" : "+"
-        case .deletion: return text.hasPrefix("---") ? "--" : "-"
-        case .hunk: return "@@"
-        case .fileHeader: return "F"
-        case .meta: return ">"
-        case .note: return "!"
-        case .context: return " "
-        case .sectionHeader, .spacer: return ""
-        }
-    }
-}
-
-struct GitDiffSection {
-    let title: String
-    let content: String
-
-    var contentLines: [String] {
-        content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
     }
 }
 
@@ -967,106 +833,17 @@ final class GitDiffLoader: ObservableObject {
         repoRoot: String,
         processHandler: @escaping (Process) -> Void
     ) -> Result<GitDiffPayload, Error> {
+        let env = GitDiffComposer.Environment.live { arguments in
+            try runPatch(arguments: arguments, processHandler: processHandler)
+        }
+
         do {
-            var sections: [GitDiffSection] = []
-
-            if file.isConflicted {
-                let diff = try runPatch(
-                    arguments: [
-                        "-C", repoRoot,
-                        "diff",
-                        "--no-ext-diff",
-                        "--no-color",
-                        "--cc",
-                        "--unified=3",
-                        "--",
-                        file.path
-                    ],
-                    processHandler: processHandler
-                )
-
-                if diff.isEmpty {
-                    return .success(GitDiffPayload(document: .note("No combined diff is available for \(file.path) right now.")))
-                }
-
-                sections.append(GitDiffSection(title: "CONFLICT", content: diff))
+            switch try GitDiffComposer.compose(for: file, repoRoot: repoRoot, env: env) {
+            case .note(let message):
+                return .success(GitDiffPayload(document: .note(message)))
+            case .sections(let sections):
                 return .success(GitDiffPayload(document: .fromSections(sections)))
             }
-
-            if file.hasStagedChanges {
-                let diff = try runPatch(
-                    arguments: [
-                        "-C", repoRoot,
-                        "diff",
-                        "--no-ext-diff",
-                        "--no-color",
-                        "--cached",
-                        "--no-renames",
-                        "--unified=3",
-                        "--",
-                        file.path
-                    ],
-                    processHandler: processHandler
-                )
-
-                if !diff.isEmpty {
-                    sections.append(GitDiffSection(title: "STAGED", content: diff))
-                }
-            }
-
-            if file.hasUnstagedChanges {
-                let diff = try runPatch(
-                    arguments: [
-                        "-C", repoRoot,
-                        "diff",
-                        "--no-ext-diff",
-                        "--no-color",
-                        "--no-renames",
-                        "--unified=3",
-                        "--",
-                        file.path
-                    ],
-                    processHandler: processHandler
-                )
-
-                if !diff.isEmpty {
-                    sections.append(GitDiffSection(title: "UNSTAGED", content: diff))
-                }
-            }
-
-            if file.isUntracked {
-                let absolutePath = (repoRoot as NSString).appendingPathComponent(file.path)
-                var isDirectory: ObjCBool = false
-                if FileManager.default.fileExists(atPath: absolutePath, isDirectory: &isDirectory), isDirectory.boolValue {
-                    sections.append(GitDiffSection(
-                        title: "UNTRACKED",
-                        content: "\(file.path) is an untracked directory. Add or select a file inside it to inspect an exact patch."
-                    ))
-                } else {
-                    let diff = try runPatch(
-                        arguments: [
-                            "-C", repoRoot,
-                            "diff",
-                            "--no-index",
-                            "--no-color",
-                            "--",
-                            "/dev/null",
-                            file.path
-                        ],
-                        processHandler: processHandler
-                    )
-
-                    if !diff.isEmpty {
-                        sections.append(GitDiffSection(title: "UNTRACKED", content: diff))
-                    }
-                }
-            }
-
-            if sections.isEmpty {
-                return .success(GitDiffPayload(document: .note("No patch is available for \(file.path).")))
-            }
-
-            return .success(GitDiffPayload(document: .fromSections(sections)))
         } catch {
             return .failure(error)
         }

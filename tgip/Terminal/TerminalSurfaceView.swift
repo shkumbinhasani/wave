@@ -23,14 +23,12 @@ class TerminalSurfaceView: NSView {
     }
 
     var initialWorkingDirectory: String?
-    var initialCommand: String?
     var initialInput: String?
 
-    init(runtime: GhosttyRuntime, session: TerminalSession, workingDirectory: String? = nil, command: String? = nil, initialInput: String? = nil) {
+    init(runtime: GhosttyRuntime, session: TerminalSession, workingDirectory: String? = nil, initialInput: String? = nil) {
         self.runtime = runtime
         self.session = session
         self.initialWorkingDirectory = workingDirectory
-        self.initialCommand = command
         self.initialInput = initialInput
         super.init(frame: .zero)
         wantsLayer = true
@@ -47,6 +45,13 @@ class TerminalSurfaceView: NSView {
 
     // MARK: - Lifecycle
 
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        // Stop the display link before we leave the window so its callback
+        // thread can't race surface teardown.
+        if newWindow == nil { stopDisplayLink() }
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard let window else { stopDisplayLink(); return }
@@ -54,6 +59,12 @@ class TerminalSurfaceView: NSView {
         let s = window.backingScaleFactor
         surface.map { ghostty_surface_set_content_scale($0, Double(s), Double(s)) }
         setupDisplayLink()
+        // Re-bind window observers to the *current* window — a view can move
+        // between windows, and observers registered against the old window
+        // would otherwise be stale.
+        observeWindowVisibility()
+        updateDisplayLinkRunning()
+        updateDisplayID()
         refreshTrackingArea()
     }
 
@@ -117,18 +128,23 @@ class TerminalSurfaceView: NSView {
             return kCVReturnSuccess
         }, ud)
         self.displayLink = link
+    }
 
-        observeWindowVisibility()
-        updateDisplayLinkRunning()
-
+    private func updateDisplayID() {
+        guard let surface else { return }
         if let screen = window?.screen,
            let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
-            surface.map { ghostty_surface_set_display_id($0, id) }
+            ghostty_surface_set_display_id(surface, id)
         }
     }
 
+    /// (Re)register window-visibility observers against the current window.
+    /// Idempotent — clears any observers bound to a previous window first.
     private func observeWindowVisibility() {
         let nc = NotificationCenter.default
+        for observer in windowObservers { nc.removeObserver(observer) }
+        windowObservers.removeAll()
+        guard window != nil else { return }
         windowObservers.append(nc.addObserver(
             forName: NSWindow.didChangeOcclusionStateNotification,
             object: window, queue: .main
@@ -348,9 +364,11 @@ class TerminalSurfaceView: NSView {
             if ghostty_surface_mouse_captured(surface) {
                 return nil
             }
+            // Show the AppKit context menu. Don't inject a ghostty right-button
+            // press here — AppKit takes over event tracking for the menu, so no
+            // matching release would ever arrive and ghostty would think the
+            // button is still held.
             window?.makeFirstResponder(self)
-            reportMouse(event)
-            _ = ghostty_surface_mouse_button(surface, GHOSTTY_MOUSE_PRESS, GHOSTTY_MOUSE_RIGHT, ghosttyMods(event.modifierFlags))
         default:
             return nil
         }

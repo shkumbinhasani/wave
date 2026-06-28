@@ -1,20 +1,30 @@
 import SwiftUI
+import Observation
 
-class SidebarTheme: ObservableObject {
+@Observable
+final class SidebarTheme {
     static let shared = SidebarTheme()
 
     /// Set by TerminalManager to persist theme changes back to the active profile.
-    var onThemeChanged: (() -> Void)?
+    @ObservationIgnored var onThemeChanged: (() -> Void)?
+    /// Fired immediately when `brightness` changes (drives terminal color scheme).
+    @ObservationIgnored var onBrightnessChanged: ((Double) -> Void)?
     /// True while loading values from a profile — suppresses change callbacks.
-    var isApplying = false
-    private var saveWorkItem: DispatchWorkItem?
+    @ObservationIgnored var isApplying = false
+    @ObservationIgnored private var saveWorkItem: DispatchWorkItem?
+    @ObservationIgnored private let store: ThemeStore
 
-    @Published var accentColor: Color { didSet { debouncedSave() } }
-    @Published var backgroundOpacity: Double { didSet { debouncedSave() } }
-    @Published var vibrancy: Double { didSet { debouncedSave() } }
+    var accentColor: Color { didSet { debouncedSave() } }
+    var backgroundOpacity: Double { didSet { debouncedSave() } }
+    var vibrancy: Double { didSet { debouncedSave() } }
     /// 0 = dark, 1 = light
-    @Published var brightness: Double { didSet { debouncedSave() } }
-    @Published var lightText: Bool { didSet { debouncedSave() } }
+    var brightness: Double {
+        didSet {
+            if oldValue != brightness { onBrightnessChanged?(brightness) }
+            debouncedSave()
+        }
+    }
+    var lightText: Bool { didSet { debouncedSave() } }
 
     static let presets: [Color] = [
         .white,
@@ -29,22 +39,27 @@ class SidebarTheme: ObservableObject {
         Color(red: 0.4, green: 0.4, blue: 0.4),
     ]
 
-    private init() {
-        let d = UserDefaults.standard
-        // Defaults match the original look before theming existed
-        self.backgroundOpacity = d.object(forKey: "t.bg") as? Double ?? 0.0
-        self.vibrancy = d.object(forKey: "t.vib") as? Double ?? 1.0
-        self.brightness = d.object(forKey: "t.bri") as? Double ?? 0.0
-        if let c = d.array(forKey: "t.acc") as? [Double], c.count == 3 {
-            self.accentColor = Color(red: c[0], green: c[1], blue: c[2])
-        } else {
-            self.accentColor = Color(red: 0.15, green: 0.15, blue: 0.15)
-        }
-        self.lightText = d.object(forKey: "t.lt") as? Bool ?? true
+    /// Inject a store to construct a theme in tests or previews without touching
+    /// the shared UserDefaults. The app uses `.shared`, which defaults to the
+    /// live store.
+    init(store: ThemeStore = UserDefaultsThemeStore()) {
+        self.store = store
+        let snapshot = store.load()
+        self.accentColor = snapshot.accentColor
+        self.backgroundOpacity = snapshot.backgroundOpacity
+        self.vibrancy = snapshot.vibrancy
+        self.brightness = snapshot.brightness
+        self.lightText = snapshot.lightText
     }
 
     func adaptiveForeground(opacity: Double = 1) -> Color {
-        (lightText ? Color.white : Color.black).opacity(Self.clamp(opacity))
+        Self.adaptiveForeground(lightText: lightText, opacity: opacity)
+    }
+
+    /// Foreground color for an arbitrary `lightText` value — lets inactive
+    /// profile pages render in their own colors instead of the live theme's.
+    static func adaptiveForeground(lightText: Bool, opacity: Double = 1) -> Color {
+        (lightText ? Color.white : Color.black).opacity(clamp(opacity))
     }
 
     func adaptiveScrim(opacity: Double = 1) -> Color {
@@ -53,12 +68,20 @@ class SidebarTheme: ObservableObject {
 
     func apply(from profile: Profile) {
         isApplying = true
-        withAnimation(.easeInOut(duration: 0.35)) {
+        // Snap the light/dark text mode so glyph colors don't smear white↔black
+        // through gray; crossfade the continuous background values so the whole
+        // sidebar container (transparent over this background) transitions
+        // uniformly, top to bottom.
+        var snap = Transaction()
+        snap.disablesAnimations = true
+        withTransaction(snap) {
+            lightText = profile.lightText
+        }
+        withAnimation(.easeInOut(duration: 0.3)) {
             accentColor = profile.accentColor
             backgroundOpacity = profile.backgroundOpacity
             vibrancy = profile.vibrancy
             brightness = profile.brightness
-            lightText = profile.lightText
         }
         isApplying = false
         flushSave()
@@ -76,14 +99,13 @@ class SidebarTheme: ObservableObject {
 
     private func flushSave() {
         guard !isApplying else { return }
-        let d = UserDefaults.standard
-        d.set(backgroundOpacity, forKey: "t.bg")
-        d.set(vibrancy, forKey: "t.vib")
-        d.set(brightness, forKey: "t.bri")
-        if let c = NSColor(accentColor).usingColorSpace(.deviceRGB) {
-            d.set([c.redComponent, c.greenComponent, c.blueComponent], forKey: "t.acc")
-        }
-        d.set(lightText, forKey: "t.lt")
+        store.save(ThemeSnapshot(
+            accentColor: accentColor,
+            backgroundOpacity: backgroundOpacity,
+            vibrancy: vibrancy,
+            brightness: brightness,
+            lightText: lightText
+        ))
         onThemeChanged?()
     }
 
@@ -109,7 +131,9 @@ class SidebarTheme: ObservableObject {
 // MARK: - Theme Editor (Arc-style visual panel)
 
 struct ThemeEditor: View {
-    @ObservedObject var theme = SidebarTheme.shared
+    // Direct reference: ThemeEditor is presented from the sidebar, inside the
+    // detached NSHostingView — see note in Sidebar.
+    @Bindable var theme = SidebarTheme.shared
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {

@@ -6,7 +6,7 @@ import GhosttyKit
 /// adding/removing children — the surface views themselves are never
 /// destroyed on tab switch.
 struct TerminalView: NSViewRepresentable {
-    @EnvironmentObject var manager: TerminalManager
+    @Environment(TerminalManager.self) var manager
     let sessionID: UUID?
 
     func makeNSView(context: Context) -> NSView {

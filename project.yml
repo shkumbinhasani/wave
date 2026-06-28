@@ -35,7 +35,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.wave.terminal
         PRODUCT_NAME: wave
-        MARKETING_VERSION: "0.5.7"
+        MARKETING_VERSION: "0.5.8"
         CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_FILE: tgip/Info.plist
         CODE_SIGN_ENTITLEMENTS: tgip/tgip.entitlements
@@ -63,3 +63,23 @@ targets:
       - framework: Frameworks/GhosttyKit.xcframework
         embed: false
       - package: Sparkle
+    scheme:
+      testTargets:
+        - waveTests
+
+  waveTests:
+    type: bundle.unit-test
+    platform: macOS
+    # Logic-test bundle: compiles the pure sources under test directly, with no
+    # host app, so the suite never launches the terminal. Only files free of
+    # AppKit/libghostty/Process side effects belong here.
+    sources:
+      - path: tgipTests
+      - path: tgip/Git/GitDiffModel.swift
+      - path: tgip/Git/GitDiffComposer.swift
+      - path: tgip/GitSupport.swift
+      - path: tgip/Theme/ThemeStore.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.wave.tests
+        GENERATE_INFOPLIST_FILE: YES

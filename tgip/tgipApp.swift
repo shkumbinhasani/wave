@@ -3,13 +3,14 @@ import SwiftUI
 @main
 struct tgipApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
-    @StateObject private var manager = TerminalManager()
-    @StateObject private var updater = UpdaterController()
+    @State private var manager = TerminalManager()
+    @State private var updater = UpdaterController()
 
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .environmentObject(manager)
+                .environment(manager)
+                .environment(SidebarTheme.shared)
                 .onAppear {
                     appDelegate.terminalManager = manager
                 }
@@ -33,6 +34,26 @@ struct tgipApp: App {
                 .disabled(manager.selectedSession == nil)
             }
 
+            // Find — proper macOS menu commands (replaces hidden in-view buttons).
+            CommandGroup(after: .textEditing) {
+                Button("Find") {
+                    if manager.presentedGitDiff == nil { manager.showSearch() }
+                }
+                .keyboardShortcut("f", modifiers: .command)
+
+                Button("Find Next") {
+                    if manager.presentedGitDiff == nil { manager.navigateSearch(.next) }
+                }
+                .keyboardShortcut("g", modifiers: .command)
+                .disabled(manager.searchState == nil)
+
+                Button("Find Previous") {
+                    if manager.presentedGitDiff == nil { manager.navigateSearch(.previous) }
+                }
+                .keyboardShortcut("g", modifiers: [.command, .shift])
+                .disabled(manager.searchState == nil)
+            }
+
             CommandGroup(after: .sidebar) {
                 Button("Toggle Sidebar") {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -40,6 +61,12 @@ struct tgipApp: App {
                     }
                 }
                 .keyboardShortcut("s", modifiers: .command)
+
+                Button("Toggle Git Diff") {
+                    manager.toggleGitDiff()
+                }
+                .keyboardShortcut("d", modifiers: [.command, .shift])
+                .disabled(!manager.gitIntegrationEnabled)
             }
 
             CommandGroup(after: .toolbar) {
@@ -70,15 +97,16 @@ struct tgipApp: App {
 
         Settings {
             AppSettingsView()
-                .environmentObject(manager)
+                .environment(manager)
         }
     }
 }
 
 private struct AppSettingsView: View {
-    @EnvironmentObject private var manager: TerminalManager
+    @Environment(TerminalManager.self) private var manager
 
     var body: some View {
+        @Bindable var manager = manager
         VStack(alignment: .leading, spacing: 12) {
             Toggle("Enable Git integration", isOn: $manager.gitIntegrationEnabled)
 

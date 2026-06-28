@@ -472,7 +472,10 @@ private final class GitEventStreamMonitor {
         let callback: FSEventStreamCallback = { _, info, _, eventPaths, _, _ in
             guard let info else { return }
             let monitor = Unmanaged<GitEventStreamMonitor>.fromOpaque(info).takeUnretainedValue()
-            let paths = unsafeBitCast(eventPaths, to: NSArray.self) as? [String] ?? []
+            // With kFSEventStreamCreateFlagUseCFTypes, eventPaths is a CFArray
+            // of CFString — bridge it through its CF type rather than bit-casting.
+            let paths = Unmanaged<CFArray>.fromOpaque(eventPaths)
+                .takeUnretainedValue() as? [String] ?? []
             if !paths.isEmpty {
                 monitor.callback()
             }

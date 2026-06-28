@@ -1,16 +1,21 @@
 import SwiftUI
 import Sparkle
 
-final class UpdaterController: ObservableObject {
-    let updater: SPUUpdater
+final class UpdaterController {
+    /// Retain the controller itself — it owns the standard user driver that
+    /// presents the update UI. Keeping only `.updater` would let the driver
+    /// deallocate and the update dialogs would never appear.
+    private let controller: SPUStandardUpdaterController
     private let delegate = UpdaterDelegate()
 
+    var updater: SPUUpdater { controller.updater }
+
     init() {
-        self.updater = SPUStandardUpdaterController(
+        self.controller = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: delegate,
             userDriverDelegate: nil
-        ).updater
+        )
     }
 
     func checkForUpdates() {
