@@ -176,8 +176,86 @@ struct ContentView: View {
 
     /// The same group list the sidebar uses — needed for confirmFocus.
     var sidebarGroups: [(fullPath: String, sessions: [TerminalSession])] {
-        buildGroups(sessions: manager.sessions, pinned: manager.pinnedPaths)
+        buildGroups(sessions: manager.sessions, pinned: manager.pinnedPaths) {
+            manager.groupAnchor(for: $0, pinned: manager.pinnedPaths)
+        }
     }
+}
+
+// MARK: - Sidebar tree (subfolders within a group)
+
+/// One rendered row inside a group: either a folder header or a session tab,
+/// carrying its depth for indentation.
+struct SidebarTreeRow: Identifiable {
+    enum Kind { case folder(String); case tab(TerminalSession) }
+    let id: String
+    let kind: Kind
+    let fullPath: String   // folder path (= the session's cwd for tabs)
+    let depth: Int
+    /// Per level (root→self): whether the node at that level is the last child of
+    /// its parent. Drives the connectors — ancestors that aren't last keep a
+    /// vertical spine; the last child curves and stops, others tee and continue.
+    let lasts: [Bool]
+}
+
+/// Flatten a group's sessions into a folder tree relative to `anchor`. Sessions at
+/// the anchor itself stay at depth 0; deeper ones nest under folder rows, with
+/// single-child folder chains collapsed (so `apps/backend` is one row, not two).
+func buildSidebarTree(sessions: [TerminalSession], anchor: String) -> [SidebarTreeRow] {
+    final class Node {
+        var children: [String: Node] = [:]
+        var sessions: [TerminalSession] = []
+        var order = Int.max
+    }
+
+    let root = Node()
+    var counter = 0
+
+    for session in sessions {
+        let cwd = session.workingDirectory ?? anchor
+        guard cwd != anchor, cwd.hasPrefix(anchor + "/") else { root.sessions.append(session); continue }
+        let components = cwd.dropFirst(anchor.count + 1).split(separator: "/").map(String.init)
+        var node = root
+        for component in components {
+            if node.children[component] == nil {
+                let child = Node()
+                child.order = counter; counter += 1
+                node.children[component] = child
+            }
+            node = node.children[component]!
+        }
+        node.sessions.append(session)
+    }
+
+    var rows: [SidebarTreeRow] = []
+
+    func walk(_ node: Node, path: String, depth: Int, lasts: [Bool]) {
+        let folders = node.children.sorted { $0.value.order < $1.value.order }
+        let total = node.sessions.count + folders.count
+        var index = 0
+
+        // Tabs first, then subfolders.
+        for session in node.sessions {
+            index += 1
+            rows.append(SidebarTreeRow(id: "t:\(session.id)", kind: .tab(session),
+                                       fullPath: path, depth: depth, lasts: lasts + [index == total]))
+        }
+        for (key, child) in folders {
+            index += 1
+            let isLast = index == total
+            // Collapse single-child, session-less chains: apps -> backend becomes "apps/backend".
+            var label = key, fullPath = path + "/" + key, node = child
+            while node.sessions.isEmpty, node.children.count == 1, let (childKey, grandchild) = node.children.first {
+                label += "/\(childKey)"; fullPath += "/\(childKey)"; node = grandchild
+            }
+            rows.append(SidebarTreeRow(id: "f:\(fullPath)", kind: .folder(label),
+                                       fullPath: fullPath, depth: depth, lasts: lasts + [isLast]))
+            walk(node, path: fullPath, depth: depth + 1, lasts: lasts + [isLast])
+        }
+    }
+
+    walk(root, path: anchor, depth: 0, lasts: [])
+    return rows
 }
 
 // MARK: - Shared group builder
@@ -186,9 +264,10 @@ struct ContentView: View {
 /// then any remaining groups from live sessions.
 func buildGroups(
     sessions: [TerminalSession],
-    pinned: [String]
+    pinned: [String],
+    anchor: (String) -> String
 ) -> [(fullPath: String, sessions: [TerminalSession])] {
-    let dict = Dictionary(grouping: sessions) { $0.workingDirectory ?? "~" }
+    let dict = Dictionary(grouping: sessions) { anchor($0.workingDirectory ?? "~") }
     var seen = Set<String>()
     var result: [(fullPath: String, sessions: [TerminalSession])] = []
 
@@ -327,8 +406,12 @@ struct Sidebar: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 2) {
                 let profileGroups = isActive
-                    ? buildGroups(sessions: manager.sessions, pinned: manager.pinnedPaths)
-                    : buildGroups(sessions: manager.sessionsForProfile(at: index), pinned: profile.pinnedPaths)
+                    ? buildGroups(sessions: manager.sessions, pinned: manager.pinnedPaths) {
+                        manager.groupAnchor(for: $0, pinned: manager.pinnedPaths)
+                    }
+                    : buildGroups(sessions: manager.sessionsForProfile(at: index), pinned: profile.pinnedPaths) {
+                        manager.groupAnchor(for: $0, pinned: profile.pinnedPaths)
+                    }
                 let labels = disambiguatedLabels(for: profileGroups.map { $0.fullPath })
 
                 ForEach(Array(profileGroups.enumerated()), id: \.element.fullPath) { groupIndex, group in
@@ -591,18 +674,89 @@ struct DirectoryGroup: View {
                 }
             }
 
-            // Tabs
-            if sessions.isEmpty {
-                EmptyView()
-            } else {
-                ForEach(Array(sessions.enumerated()), id: \.element.id) { tabIndex, session in
-                    let isTabFocused = isFocused && focusedTabOffset == tabIndex
-                    TabRow(lightText: lightText, session: session, directory: fullPath, isTabFocused: isTabFocused, isLast: tabIndex == sessions.count - 1)
+            // Tabs — nested by subfolder relative to the group anchor.
+            // Zero spacing so each row's connector is flush with the next and the
+            // tree spine stays continuous (row padding lives inside the rows).
+            if !sessions.isEmpty {
+                let rows = buildSidebarTree(sessions: sessions, anchor: fullPath)
+                VStack(spacing: 0) {
+                    ForEach(rows) { row in
+                        HStack(spacing: 0) {
+                            treeConnector(depth: row.depth, lasts: row.lasts)
+                            switch row.kind {
+                            case .folder(let label):
+                                folderRow(label: label)
+                            case .tab(let session):
+                                let originalIndex = sessions.firstIndex(where: { $0.id == session.id }) ?? 0
+                                TabRow(
+                                    lightText: lightText,
+                                    session: session,
+                                    directory: row.fullPath,
+                                    isTabFocused: isFocused && focusedTabOffset == originalIndex,
+                                    isLast: row.id == rows.last?.id
+                                )
+                            }
+                        }
+                    }
                 }
-
             }
         }
         .padding(.vertical, 2)
+    }
+
+    private static let treeIndent: CGFloat = 14
+
+    /// Dotted tree connectors: a continuing vertical spine for ancestors that
+    /// aren't the last child, and a curved elbow into each row's element.
+    @ViewBuilder
+    private func treeConnector(depth: Int, lasts: [Bool]) -> some View {
+        let indent = Self.treeIndent
+        Canvas { ctx, size in
+            let dash = StrokeStyle(lineWidth: 1, lineCap: .round)
+            let shading = GraphicsContext.Shading.color(foreground(0.28))
+            let midY = size.height / 2
+            let radius: CGFloat = 5
+            func centerX(_ level: Int) -> CGFloat { CGFloat(level) * indent + indent / 2 }
+
+            // Ancestor spines — only where that ancestor still has siblings below.
+            for level in 0..<depth where level < lasts.count && !lasts[level] {
+                var p = Path()
+                p.move(to: CGPoint(x: centerX(level), y: 0))
+                p.addLine(to: CGPoint(x: centerX(level), y: size.height))
+                ctx.stroke(p, with: shading, style: dash)
+            }
+
+            // Elbow into this element.
+            let x = centerX(depth)
+            let isLast = lasts.last ?? true
+            var elbow = Path()
+            elbow.move(to: CGPoint(x: x, y: 0))
+            elbow.addLine(to: CGPoint(x: x, y: midY - radius))
+            elbow.addQuadCurve(to: CGPoint(x: x + radius, y: midY), control: CGPoint(x: x, y: midY))
+            ctx.stroke(elbow, with: shading, style: dash)
+
+            if !isLast {   // tee: spine keeps going for the next sibling
+                var down = Path()
+                down.move(to: CGPoint(x: x, y: midY))
+                down.addLine(to: CGPoint(x: x, y: size.height))
+                ctx.stroke(down, with: shading, style: dash)
+            }
+        }
+        .frame(width: CGFloat(depth + 1) * indent)
+    }
+
+    @ViewBuilder
+    private func folderRow(label: String) -> some View {
+        HStack(spacing: 4) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .lineLimit(1)
+                .truncationMode(.head)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(foreground(0.5))
+        .padding(.trailing, 8)
+        .padding(.vertical, 4)
     }
 }
 
@@ -636,11 +790,6 @@ struct TabRow: View {
         DragState.draggedSessionID == session.id
     }
 
-    private var dotColor: Color {
-        if session.needsAttention { return .orange }
-        return session.isRunning ? .green : .gray
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             // Drop indicator line above
@@ -651,34 +800,30 @@ struct TabRow: View {
                 .opacity(isDropTarget && !dropAtEnd ? 1 : 0)
 
             HStack(spacing: 8) {
-                Circle()
-                    .fill(dotColor)
-                    .frame(width: 6, height: 6)
-                    .shadow(color: session.needsAttention ? .orange.opacity(attentionPulse ? 0.9 : 0.2) : .clear, radius: 4)
-
                 Text(session.title)
-                    .font(.system(size: 14, weight: isSelected ? .medium : .regular))
-                    .foregroundStyle(foreground(isSelected ? 0.95 : 0.75))
+                    .font(.system(size: 13, weight: isSelected ? .medium : .regular))
+                    .foregroundStyle(foreground(isSelected ? 0.95 : 0.72))
                     .lineLimit(1)
+                    .truncationMode(.tail)
 
-                Spacer()
+                Spacer(minLength: 0)
 
                 if hovering || isSelected {
                     Button(action: { manager.closeSession(session) }) {
                         Image(systemName: "xmark")
                             .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(foreground(0.35))
+                            .foregroundStyle(foreground(0.4))
                             .frame(width: 16, height: 16)
                             .background(
-                                Circle().fill(foreground(hovering ? 0.1 : 0))
+                                Circle().fill(foreground(hovering ? 0.12 : 0))
                             )
                     }
                     .buttonStyle(.plain)
                     .transition(.opacity)
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(
