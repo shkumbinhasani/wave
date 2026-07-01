@@ -38,7 +38,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.wave.terminal
         PRODUCT_NAME: wave
-        MARKETING_VERSION: "0.5.8"
+        MARKETING_VERSION: "0.6.0"
         CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_FILE: tgip/Info.plist
         CODE_SIGN_ENTITLEMENTS: tgip/tgip.entitlements
