@@ -1,15 +1,13 @@
 import AppKit
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    weak var terminalManager: TerminalManager?
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         moveToApplicationsIfNeeded()
         AttentionMonitor.ensureClaudeCodeHookInstalled()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard terminalManager?.shouldConfirmAppQuit() == true else {
+        guard AppRuntime.shared.shouldConfirmAppQuit() else {
             return .terminateNow
         }
 

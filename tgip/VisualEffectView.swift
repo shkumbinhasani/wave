@@ -23,6 +23,18 @@ struct VisualEffectView: NSViewRepresentable {
     }
 }
 
+/// An NSView that reports when it lands in (or moves between) windows —
+/// reliable attachment hook for window-configuring representables, unlike
+/// async hops from makeNSView that race window creation.
+final class WindowAttachmentView: NSView {
+    var onAttach: ((NSWindow) -> Void)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let window { onAttach?(window) }
+    }
+}
+
 struct WindowConfigurator: NSViewRepresentable {
     final class Coordinator {
         weak var window: NSWindow?
@@ -48,34 +60,32 @@ struct WindowConfigurator: NSViewRepresentable {
         Coordinator()
     }
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
+    func makeNSView(context: Context) -> WindowAttachmentView {
+        let view = WindowAttachmentView()
         let coordinator = context.coordinator
-        DispatchQueue.main.async {
-            guard view.window != nil, !coordinator.didConfigure else { return }
-            coordinator.didConfigure = true
-            configureWindow(for: view)
+        view.onAttach = { window in
+            attach(to: window, coordinator: coordinator)
         }
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
-        guard let window = nsView.window else { return }
-
-        // Style the window once, not on every update pass.
-        if !context.coordinator.didConfigure {
-            context.coordinator.didConfigure = true
-            configureWindow(for: nsView)
+    func updateNSView(_ nsView: WindowAttachmentView, context: Context) {
+        if let window = nsView.window {
+            attach(to: window, coordinator: context.coordinator)
         }
+    }
 
-        registerObservers(for: window, coordinator: context.coordinator)
+    private func attach(to window: NSWindow, coordinator: Coordinator) {
+        if !coordinator.didConfigure {
+            coordinator.didConfigure = true
+            configureWindow(window)
+        }
+        registerObservers(for: window, coordinator: coordinator)
     }
 
     static let windowCornerRadius: CGFloat = 20
 
-    private func configureWindow(for view: NSView) {
-        guard let window = view.window else { return }
-
+    private func configureWindow(_ window: NSWindow) {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
         window.toolbar = nil

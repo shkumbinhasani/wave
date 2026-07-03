@@ -3,8 +3,6 @@ import Observation
 
 @Observable
 final class SidebarTheme {
-    static let shared = SidebarTheme()
-
     /// Set by TerminalManager to persist theme changes back to the active profile.
     @ObservationIgnored var onThemeChanged: (() -> Void)?
     /// Fired immediately when `brightness` changes (drives terminal color scheme).
@@ -131,9 +129,10 @@ final class SidebarTheme {
 // MARK: - Theme Editor (Arc-style visual panel)
 
 struct ThemeEditor: View {
-    // Direct reference: ThemeEditor is presented from the sidebar, inside the
-    // detached NSHostingView — see note in Sidebar.
-    @Bindable var theme = SidebarTheme.shared
+    // Injected explicitly (not via environment): ThemeEditor is presented from
+    // the sidebar, inside the detached NSHostingView — see note in Sidebar.
+    // Each window passes its own theme instance.
+    @Bindable var theme: SidebarTheme
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {

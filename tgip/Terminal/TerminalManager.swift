@@ -2,27 +2,30 @@ import SwiftUI
 import GhosttyKit
 import Observation
 
+/// Per-window terminal state: this window's sessions, selection, active
+/// profile, theme, sidebar, search, and diff inspector. App-wide state
+/// (ghostty runtime, profiles list, git, attention) lives in AppRuntime;
+/// the forwarding accessors below keep call sites uniform — views only
+/// ever talk to their window's manager.
 @Observable
 final class TerminalManager {
-    private enum DefaultsKey {
-        static let gitIntegrationEnabled = "git.enabled"
-    }
+    enum ProfileSwitchDirection { case forward, backward }
 
-    @ObservationIgnored private let gitRepositoryService: GitRepositoryService
-    @ObservationIgnored private let attentionMonitor = AttentionMonitor()
-    var gitIntegrationEnabled: Bool = UserDefaults.standard.object(forKey: DefaultsKey.gitIntegrationEnabled) as? Bool ?? true {
-        didSet {
-            guard oldValue != gitIntegrationEnabled else { return }
-            UserDefaults.standard.set(gitIntegrationEnabled, forKey: DefaultsKey.gitIntegrationEnabled)
-            if gitIntegrationEnabled {
-                refreshGitMonitoring()
-            } else {
-                gitLookupsByPath = [:]
-                gitStatusesByRoot = [:]
-                gitRepositoryService.reset()
-            }
-        }
-    }
+    @ObservationIgnored let runtime: AppRuntime
+    /// This window's theme — each window styles itself from its own profile.
+    @ObservationIgnored let theme = SidebarTheme()
+    /// The NSWindow hosting this manager's content — set by WindowRoot.
+    @ObservationIgnored weak var window: NSWindow?
+    /// Whether this is the primary (first) window — the one whose tabs swap
+    /// in and out on profile switches. Maintained by AppRuntime's registry.
+    var isMain: Bool = false
+
+    /// This window's active profile. Per-window: two windows can be on
+    /// different profiles (Arc-style), or even show the same one.
+    var activeProfileIndex: Int = 0
+    /// Direction of the last profile switch — drives slide animation.
+    var profileSwitchDirection: ProfileSwitchDirection = .forward
+
     var sessions: [TerminalSession] = []
     var selectedSessionID: UUID? {
         didSet {
@@ -33,46 +36,9 @@ final class TerminalManager {
         }
     }
 
-    // MARK: - Profiles
-
-    enum ProfileSwitchDirection { case forward, backward }
-
-    var profiles: [Profile] = []
-    var activeProfileIndex: Int = 0
-    /// Direction of the last profile switch — drives slide animation.
-    var profileSwitchDirection: ProfileSwitchDirection = .forward
-    /// Per-profile session storage (kept alive while profile is inactive).
-    private var storedSessions: [UUID: [TerminalSession]] = [:]
-    /// Per-profile selected session.
-    private var storedSelectedSession: [UUID: UUID?] = [:]
-    /// Suppresses didSet persistence during profile switch.
-    private var isSwitchingProfile = false
-
-    var activeProfile: Profile {
-        profiles.indices.contains(activeProfileIndex) ? profiles[activeProfileIndex] : Profile()
-    }
-
-    /// Pinned directory paths — always shown in sidebar, persisted via profile.
-    var pinnedPaths: [String] = [] {
-        didSet {
-            guard !isSwitchingProfile, profiles.indices.contains(activeProfileIndex) else { return }
-            profiles[activeProfileIndex].pinnedPaths = pinnedPaths
-            scheduleSave()
-        }
-    }
-
-    /// Per-group metadata (icon, display name). Keyed by absolute path.
-    var groupMeta: [String: GroupMeta] = [:] {
-        didSet {
-            guard !isSwitchingProfile, profiles.indices.contains(activeProfileIndex) else { return }
-            profiles[activeProfileIndex].groupMeta = groupMeta
-            scheduleSave()
-        }
-    }
-
     var sidebarPinned: Bool = true
 
-    /// Which group index is keyboard-focused (nil = none). Set by Cmd+N.
+    /// Which group index is keyboard-focused (nil = none). Set by Cmd+1…9.
     var focusedGroupIndex: Int?
     /// Which tab within the focused group is highlighted. Arrow keys move this.
     var focusedTabOffset: Int = 0
@@ -80,87 +46,213 @@ final class TerminalManager {
     var searchFocusToken: Int = 0
     /// The uncommitted-diff inspector currently shown in the main pane (nil = terminal).
     var presentedGitDiff: GitDiffPresentation?
-    private(set) var gitLookupsByPath: [String: GitPathLookup] = [:]
-    private(set) var gitStatusesByRoot: [String: GitRepoStatus] = [:]
 
-    let ghostty: GhosttyRuntime
+    @ObservationIgnored private var didTeardown = false
 
     var selectedSession: TerminalSession? {
         sessions.first { $0.id == selectedSessionID }
     }
 
-    init() {
-        self.gitRepositoryService = GitRepositoryService()
-        self.ghostty = GhosttyRuntime()
+    init(runtime: AppRuntime = .shared) {
+        self.runtime = runtime
 
-        // Load profiles or migrate from legacy settings
-        if let data = UserDefaults.standard.data(forKey: "profiles"),
-           let loaded = try? JSONDecoder().decode([Profile].self, from: data),
-           !loaded.isEmpty {
-            self.profiles = loaded
-            self.activeProfileIndex = min(
-                max(UserDefaults.standard.integer(forKey: "activeProfileIndex"), 0),
-                loaded.count - 1
-            )
-        } else {
-            // Migration: create default profile from existing settings
-            var defaultProfile = Profile()
-            defaultProfile.pinnedPaths = UserDefaults.standard.stringArray(forKey: "pinnedPaths") ?? []
-            defaultProfile.groupMeta = Self.loadGroupMeta()
-            defaultProfile.captureTheme(from: SidebarTheme.shared)
-            self.profiles = [defaultProfile]
-            self.activeProfileIndex = 0
-        }
+        // Start on the primary window's last-used profile; tear-outs override
+        // this via setActiveProfile before the window shows.
+        let savedIndex = UserDefaults.standard.integer(forKey: "activeProfileIndex")
+        self.activeProfileIndex = runtime.profiles.indices.contains(savedIndex) ? savedIndex : 0
+        theme.apply(from: activeProfile)
+        runtime.ghostty.setColorScheme(dark: theme.brightness < 0.5)
 
-        // Load active profile data
-        let active = profiles[activeProfileIndex]
-        self.pinnedPaths = active.pinnedPaths
-        self.groupMeta = active.groupMeta
-
-        gitRepositoryService.onSnapshot = { [weak self] lookups, statuses in
-            guard let self else { return }
-            guard self.gitIntegrationEnabled else {
-                self.gitLookupsByPath = [:]
-                self.gitStatusesByRoot = [:]
-                return
-            }
-            self.gitLookupsByPath = lookups
-            self.gitStatusesByRoot = statuses
-        }
-        ghostty.onAction = { [weak self] target, action in
-            self?.handleAction(target: target, action: action) ?? false
-        }
-
-        // Attention monitor — highlight tabs when external tools need input
-        attentionMonitor.onAttention = { [weak self] sessionID, cwd in
-            self?.handleAttention(sessionID: sessionID, cwd: cwd)
-        }
-        attentionMonitor.start()
-
-        // Apply theme from active profile & sync brightness → terminal color scheme
-        let theme = SidebarTheme.shared
-        theme.apply(from: active)
-        ghostty.setColorScheme(dark: theme.brightness < 0.5)
-        theme.onBrightnessChanged = { [weak self] val in
-            self?.ghostty.setColorScheme(dark: val < 0.5)
-        }
-
-        // Persist theme edits back to the active profile
+        // Theme edits in this window persist to this window's active profile.
         theme.onThemeChanged = { [weak self] in
-            self?.saveThemeToActiveProfile()
+            guard let self else { return }
+            self.runtime.captureTheme(self.theme, forProfileAt: self.activeProfileIndex)
         }
-
-        saveProfiles()
-        createSession()
+        theme.onBrightnessChanged = { [weak self] value in
+            self?.runtime.ghostty.setColorScheme(dark: value < 0.5)
+        }
     }
 
-    // MARK: - Sessions
+    // MARK: - Forwarding: app-level state
 
-    /// Sessions for a given profile index (active uses live array, others use stored).
+    var ghostty: GhosttyRuntime { runtime.ghostty }
+
+    var gitIntegrationEnabled: Bool {
+        get { runtime.gitIntegrationEnabled }
+        set { runtime.gitIntegrationEnabled = newValue }
+    }
+
+    var profiles: [Profile] { runtime.profiles }
+
+    var activeProfile: Profile {
+        runtime.profiles.indices.contains(activeProfileIndex)
+            ? runtime.profiles[activeProfileIndex]
+            : Profile()
+    }
+
+    /// This window's pinned paths — the active profile's, shared live with any
+    /// other window on the same profile.
+    var pinnedPaths: [String] {
+        get { activeProfile.pinnedPaths }
+        set { runtime.setPinnedPaths(newValue, forProfileAt: activeProfileIndex) }
+    }
+
+    var groupMeta: [String: GroupMeta] {
+        get { activeProfile.groupMeta }
+        set { runtime.setGroupMeta(newValue, forProfileAt: activeProfileIndex) }
+    }
+
+    func togglePin(path: String) {
+        if let i = pinnedPaths.firstIndex(of: path) {
+            pinnedPaths.remove(at: i)
+        } else {
+            pinnedPaths.append(path)
+            // Auto-detect a favicon/logo on pin
+            if meta(for: path).imagePath == nil,
+               let found = GroupMeta.autoDetectImage(in: path) {
+                setImage(found, for: path)
+            }
+        }
+        runtime.refreshGitMonitoring()
+    }
+
+    func isPinned(_ path: String) -> Bool { pinnedPaths.contains(path) }
+    func meta(for path: String) -> GroupMeta { groupMeta[path] ?? GroupMeta() }
+
+    func setIcon(_ icon: String, for path: String) {
+        var m = meta(for: path)
+        m.icon = icon
+        groupMeta[path] = m
+    }
+
+    func setDisplayName(_ name: String, for path: String) {
+        var m = meta(for: path)
+        m.displayName = name.isEmpty ? nil : name
+        groupMeta[path] = m
+    }
+
+    func setImage(_ imagePath: String?, for path: String) {
+        var m = meta(for: path)
+        m.imagePath = imagePath
+        groupMeta[path] = m
+    }
+
+    func groupAnchor(for cwd: String, pinned: [String]) -> String {
+        runtime.groupAnchor(for: cwd, pinned: pinned)
+    }
+
+    func gitRepositoryInfo(for path: String) -> GitRepositoryInfo? {
+        runtime.gitRepositoryInfo(for: path)
+    }
+
+    func gitStatus(forGroupPath path: String) -> GitRepoStatus? {
+        runtime.gitStatus(forGroupPath: path)
+    }
+
+    func gitStatus(forRepoRoot repoRoot: String) -> GitRepoStatus? {
+        runtime.gitStatus(forRepoRoot: repoRoot)
+    }
+
+    func refreshGitStatus(forRepoRoot repoRoot: String) {
+        runtime.refreshGitStatus(forRepoRoot: repoRoot)
+    }
+
+    /// Git status for a group path in any profile — data is tracked globally.
+    func gitStatusForProfile(at index: Int, groupPath path: String) -> GitRepoStatus? {
+        runtime.gitStatus(forGroupPath: path)
+    }
+
     func sessionsForProfile(at index: Int) -> [TerminalSession] {
         if index == activeProfileIndex { return sessions }
-        return storedSessions[profiles[index].id] ?? []
+        return runtime.previewSessions(forProfileAt: index)
     }
+
+    // MARK: - Profile switching (per-window)
+
+    /// Switch THIS window to another profile. Theme and pinned groups follow
+    /// the profile. Only the primary window swaps its tab set in and out of
+    /// the profile's stored sessions; other windows keep their tabs.
+    func switchToProfile(_ index: Int, direction: ProfileSwitchDirection? = nil) {
+        guard index != activeProfileIndex, runtime.profiles.indices.contains(index) else { return }
+
+        profileSwitchDirection = direction ?? (index > activeProfileIndex ? .forward : .backward)
+
+        if isMain {
+            // Pause rendering and stash the current profile's tab set
+            for session in sessions {
+                session.surfaceView?.isActiveTab = false
+            }
+            runtime.storeSessions(sessions, selected: selectedSessionID, forProfileID: activeProfile.id)
+        }
+
+        // Persist current theme edits into the outgoing profile
+        runtime.captureTheme(theme, forProfileAt: activeProfileIndex)
+
+        closeSearch()
+        focusedGroupIndex = nil
+
+        activeProfileIndex = index
+        if isMain {
+            UserDefaults.standard.set(index, forKey: "activeProfileIndex")
+        }
+
+        let newProfile = runtime.profiles[index]
+        theme.apply(from: newProfile)
+        runtime.ghostty.setColorScheme(dark: theme.brightness < 0.5)
+
+        if isMain {
+            let stored = runtime.takeStoredSessions(forProfileID: newProfile.id)
+            sessions = stored.sessions
+            selectedSessionID = stored.selected
+
+            // Ensure at least one session
+            if sessions.isEmpty {
+                createSession()
+            } else if selectedSessionID == nil {
+                selectedSessionID = sessions.first?.id
+            }
+
+            // Resume rendering on the newly selected tab
+            if let current = selectedSessionID {
+                sessions.first { $0.id == current }?.surfaceView?.isActiveTab = true
+            }
+        }
+
+        runtime.refreshGitMonitoring()
+        runtime.saveProfilesNow()
+    }
+
+    /// Adopt a profile without touching sessions — used when a torn-out
+    /// window inherits its source window's profile.
+    func setActiveProfile(_ index: Int) {
+        guard runtime.profiles.indices.contains(index) else { return }
+        activeProfileIndex = index
+        theme.apply(from: runtime.profiles[index])
+    }
+
+    func switchToNextProfile() {
+        guard !profiles.isEmpty else { return }
+        switchToProfile((activeProfileIndex + 1) % profiles.count, direction: .forward)
+    }
+
+    func switchToPreviousProfile() {
+        guard !profiles.isEmpty else { return }
+        switchToProfile((activeProfileIndex - 1 + profiles.count) % profiles.count, direction: .backward)
+    }
+
+    func addProfile() {
+        let index = runtime.appendProfile()
+        switchToProfile(index, direction: .forward)
+    }
+
+    func deleteProfile(at index: Int) { runtime.deleteProfile(at: index) }
+    func renameProfile(_ name: String, at index: Int) { runtime.renameProfile(name, at: index) }
+    func setSSHHost(_ host: String?, at index: Int) { runtime.setSSHHost(host, at: index) }
+    func setProfileIcon(_ icon: String, at index: Int) { runtime.setProfileIcon(icon, at: index) }
+
+    func shouldConfirmAppQuit() -> Bool { runtime.shouldConfirmAppQuit() }
+
+    // MARK: - Sessions
 
     func createSession(in directory: String? = nil) {
         let pwd = directory ?? selectedSession?.workingDirectory
@@ -202,16 +294,12 @@ final class TerminalManager {
         // New session becomes selected, so selectedSessionID didSet handles activation
 
         focusedGroupIndex = nil
-        refreshGitMonitoring()
+        runtime.refreshGitMonitoring()
     }
 
     func closeSession(_ session: TerminalSession) {
         guard shouldCloseSession(session) else { return }
         closeSessionNow(session)
-    }
-
-    func shouldConfirmAppQuit() -> Bool {
-        ghostty.appNeedsConfirmQuit()
     }
 
     private func closeSessionNow(_ session: TerminalSession) {
@@ -220,7 +308,7 @@ final class TerminalManager {
         if selectedSessionID == session.id {
             selectedSessionID = sessions.last?.id
         }
-        refreshGitMonitoring()
+        runtime.refreshGitMonitoring()
     }
 
     private func shouldCloseSession(_ session: TerminalSession) -> Bool {
@@ -259,219 +347,60 @@ final class TerminalManager {
         sessions.insert(dragged, at: insertionIndex)
     }
 
-    // MARK: - Pinning
+    // MARK: - Tear-out / transfer
 
-    func togglePin(path: String) {
-        if let i = pinnedPaths.firstIndex(of: path) {
-            pinnedPaths.remove(at: i)
-        } else {
-            pinnedPaths.append(path)
-            // Auto-detect a favicon/logo on pin
-            if meta(for: path).imagePath == nil,
-               let found = GroupMeta.autoDetectImage(in: path) {
-                setImage(found, for: path)
-            }
-        }
-        refreshGitMonitoring()
-    }
-
-    func isPinned(_ path: String) -> Bool {
-        pinnedPaths.contains(path)
-    }
-
-    func meta(for path: String) -> GroupMeta {
-        groupMeta[path] ?? GroupMeta()
-    }
-
-    func setIcon(_ icon: String, for path: String) {
-        var m = meta(for: path)
-        m.icon = icon
-        groupMeta[path] = m
-    }
-
-    func setDisplayName(_ name: String, for path: String) {
-        var m = meta(for: path)
-        m.displayName = name.isEmpty ? nil : name
-        groupMeta[path] = m
-    }
-
-    func setImage(_ imagePath: String?, for path: String) {
-        var m = meta(for: path)
-        m.imagePath = imagePath
-        groupMeta[path] = m
-    }
-
-    private static func loadGroupMeta() -> [String: GroupMeta] {
-        guard let data = UserDefaults.standard.data(forKey: "groupMeta"),
-              let meta = try? JSONDecoder().decode([String: GroupMeta].self, from: data) else {
-            return [:]
-        }
-        return meta
-    }
-
-    /// Git status for a group path in any profile — data is tracked globally.
-    func gitStatusForProfile(at index: Int, groupPath path: String) -> GitRepoStatus? {
-        gitStatus(forGroupPath: path)
-    }
-
-    // MARK: - Profile Management
-
-    func switchToProfile(_ index: Int, direction: ProfileSwitchDirection? = nil) {
-        guard index != activeProfileIndex, profiles.indices.contains(index) else { return }
-
-        profileSwitchDirection = direction ?? (index > activeProfileIndex ? .forward : .backward)
-        isSwitchingProfile = true
-
-        // Pause rendering on all current profile sessions
-        for session in sessions {
-            session.surfaceView?.isActiveTab = false
-        }
-
-        // Save current profile state
-        let currentID = profiles[activeProfileIndex].id
-        storedSessions[currentID] = sessions
-        storedSelectedSession[currentID] = selectedSessionID
-        profiles[activeProfileIndex].pinnedPaths = pinnedPaths
-        profiles[activeProfileIndex].groupMeta = groupMeta
-        profiles[activeProfileIndex].captureTheme(from: SidebarTheme.shared)
-
-        // Close search if open
-        if let state = searchState {
-            session(for: state.sessionID)?.surfaceView?.endSearch()
+    /// Remove a session from this window without destroying its surface —
+    /// the shell keeps running and the session can be adopted elsewhere.
+    func detach(_ session: TerminalSession) {
+        if searchState?.sessionID == session.id {
+            session.surfaceView?.endSearch()
             searchState = nil
         }
+        session.surfaceView?.isActiveTab = false
+        sessions.removeAll { $0.id == session.id }
+        if selectedSessionID == session.id {
+            selectedSessionID = sessions.last?.id
+        }
+        runtime.refreshGitMonitoring()
+    }
+
+    /// Take ownership of a session detached from another window.
+    func adopt(_ session: TerminalSession) {
+        sessions.append(session)
+        selectedSessionID = session.id
         focusedGroupIndex = nil
-
-        // Switch
-        activeProfileIndex = index
-        UserDefaults.standard.set(index, forKey: "activeProfileIndex")
-
-        // Load new profile — git data stays warm globally, no restore needed
-        let newProfile = profiles[index]
-        sessions = storedSessions[newProfile.id] ?? []
-        selectedSessionID = storedSelectedSession[newProfile.id] ?? nil
-        pinnedPaths = newProfile.pinnedPaths
-        groupMeta = newProfile.groupMeta
-        SidebarTheme.shared.apply(from: newProfile)
-
-        isSwitchingProfile = false
-
-        // Ensure at least one session
-        if sessions.isEmpty {
-            createSession()
-        } else if selectedSessionID == nil {
-            selectedSessionID = sessions.first?.id
-        }
-
-        // Resume rendering on the newly selected tab
-        if let current = selectedSessionID {
-            session(for: current)?.surfaceView?.isActiveTab = true
-        }
-
-        refreshGitMonitoring()
-        saveProfiles()
+        runtime.refreshGitMonitoring()
     }
 
-    func switchToNextProfile() {
-        let next = (activeProfileIndex + 1) % profiles.count
-        switchToProfile(next, direction: .forward)
-    }
-
-    func switchToPreviousProfile() {
-        let prev = (activeProfileIndex - 1 + profiles.count) % profiles.count
-        switchToProfile(prev, direction: .backward)
-    }
-
-    func addProfile() {
-        let newProfile = Profile(
-            name: "Profile \(profiles.count + 1)",
-            icon: Profile.iconChoices[profiles.count % Profile.iconChoices.count]
-        )
-        profiles.append(newProfile)
-        saveProfiles()
-        switchToProfile(profiles.count - 1, direction: .forward)
-    }
-
-    func deleteProfile(at index: Int) {
-        guard profiles.count > 1, profiles.indices.contains(index) else { return }
-
-        let profileID = profiles[index].id
-
-        // Close all sessions in the deleted profile
-        let sessionsToClose = storedSessions[profileID] ?? (index == activeProfileIndex ? sessions : [])
-        for session in sessionsToClose {
+    /// Destroy this window's sessions and leave the registry. Called when the
+    /// window closes; idempotent.
+    func teardownWindow() {
+        guard !didTeardown else { return }
+        didTeardown = true
+        for session in sessions {
             session.surfaceView?.destroySurface()
         }
-        storedSessions.removeValue(forKey: profileID)
-        storedSelectedSession.removeValue(forKey: profileID)
+        sessions.removeAll()
+        selectedSessionID = nil
+        runtime.unregister(self)
+    }
 
-        if index == activeProfileIndex {
-            // Switch to adjacent profile first
-            let newIndex = index > 0 ? index - 1 : 1
-            switchToProfile(newIndex)
-            // Remove after switching (index shifted if needed)
-            let removeIndex = index > 0 ? index : 0
-            profiles.remove(at: removeIndex)
-            activeProfileIndex = min(activeProfileIndex, profiles.count - 1)
-        } else {
-            profiles.remove(at: index)
-            if index < activeProfileIndex {
-                activeProfileIndex -= 1
-            }
+    /// Whether closing this window warrants a confirmation (running processes),
+    /// and ask the user if so.
+    func confirmWindowClose() -> Bool {
+        let needsConfirm = sessions.contains {
+            guard let surface = $0.surfaceView?.surface else { return false }
+            return ghostty_surface_needs_confirm_quit(surface)
         }
+        guard needsConfirm else { return true }
 
-        UserDefaults.standard.set(activeProfileIndex, forKey: "activeProfileIndex")
-        saveProfiles()
-    }
-
-    func renameProfile(_ name: String, at index: Int) {
-        guard profiles.indices.contains(index) else { return }
-        profiles[index].name = name
-        saveProfiles()
-    }
-
-    func setSSHHost(_ host: String?, at index: Int) {
-        guard profiles.indices.contains(index) else { return }
-        profiles[index].sshHost = host
-        saveProfiles()
-    }
-
-    func setProfileIcon(_ icon: String, at index: Int) {
-        guard profiles.indices.contains(index) else { return }
-        profiles[index].icon = icon
-        saveProfiles()
-    }
-
-    private var saveWorkItem: DispatchWorkItem?
-
-    /// Immediate save — use for explicit user actions (add/delete/rename profile).
-    private func saveProfiles() {
-        saveWorkItem?.cancel()
-        writeToDisk()
-    }
-
-    /// Debounced save — use for high-frequency changes (theme sliders, typing).
-    private func scheduleSave() {
-        saveWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            self?.writeToDisk()
-        }
-        saveWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
-    }
-
-    private func writeToDisk() {
-        // Capture latest theme into profile before writing
-        if profiles.indices.contains(activeProfileIndex) {
-            profiles[activeProfileIndex].captureTheme(from: SidebarTheme.shared)
-        }
-        if let data = try? JSONEncoder().encode(profiles) {
-            UserDefaults.standard.set(data, forKey: "profiles")
-        }
-    }
-
-    private func saveThemeToActiveProfile() {
-        scheduleSave()
+        let alert = NSAlert()
+        alert.messageText = "Close Window?"
+        alert.informativeText = "One or more tabs in this window still have running processes. Closing the window will terminate them."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Close Window")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     // MARK: - Group Navigation
@@ -505,63 +434,6 @@ final class TerminalManager {
 
     func cancelFocus() {
         focusedGroupIndex = nil
-    }
-
-    func gitRepositoryInfo(for path: String) -> GitRepositoryInfo? {
-        guard gitIntegrationEnabled else { return nil }
-        let normalized = GitCLI.normalizePath(path)
-        guard case let .repo(repository)? = gitLookupsByPath[normalized] else { return nil }
-        return repository
-    }
-
-    /// The group a session's directory belongs to: the deepest pinned ancestor,
-    /// else the enclosing git repo root, else the directory itself. This keeps a
-    /// `cd` into a subdirectory (e.g. `apps/backend` inside a monorepo) grouped
-    /// under the project instead of detaching into its own group.
-    func groupAnchor(for cwd: String, pinned: [String]) -> String {
-        let path = GitCLI.normalizePath(cwd)
-        guard !path.isEmpty else { return cwd }
-
-        // 1. Deepest pinned ancestor — explicit intent wins. Return the original
-        //    pinned string so it matches the pinned list used for ordering.
-        var bestPin: String?
-        var bestLength = -1
-        for pin in pinned {
-            let normalizedPin = GitCLI.normalizePath(pin)
-            guard !normalizedPin.isEmpty else { continue }
-            if (path == normalizedPin || path.hasPrefix(normalizedPin + "/")), normalizedPin.count > bestLength {
-                bestPin = pin
-                bestLength = normalizedPin.count
-            }
-        }
-        if let bestPin { return bestPin }
-
-        // 2. Enclosing git repo root (deepest repo — a nested submodule gets its own group).
-        if let root = gitRepositoryInfo(for: cwd)?.repoRoot { return root }
-
-        // 3. The directory itself — unchanged behavior for loose, non-repo dirs.
-        return cwd
-    }
-
-    func gitStatus(forGroupPath path: String) -> GitRepoStatus? {
-        guard gitIntegrationEnabled else { return nil }
-        guard let repository = gitRepositoryInfo(for: path),
-              let status = gitStatusesByRoot[repository.repoRoot],
-              status.hasChanges else {
-            return nil
-        }
-
-        return status
-    }
-
-    func gitStatus(forRepoRoot repoRoot: String) -> GitRepoStatus? {
-        guard gitIntegrationEnabled else { return nil }
-        return gitStatusesByRoot[GitCLI.normalizePath(repoRoot)]
-    }
-
-    func refreshGitStatus(forRepoRoot repoRoot: String) {
-        guard gitIntegrationEnabled else { return }
-        gitRepositoryService.refresh(repoRoot: repoRoot)
     }
 
     // MARK: - Search
@@ -655,148 +527,20 @@ final class TerminalManager {
 
     // MARK: - Attention
 
-    private func handleAttention(sessionID: UUID?, cwd: String?) {
-        if let sessionID {
-            // Exact match — only highlight the specific tab
-            if let session = sessions.first(where: { $0.id == sessionID }), session.id != selectedSessionID {
-                session.needsAttention = true
-            }
-        } else if let cwd {
-            // Fallback for non-Wave terminals — match by working directory
-            let normalized = GitCLI.normalizePath(cwd)
-            guard !normalized.isEmpty else { return }
-            for session in sessions {
-                guard let pwd = session.workingDirectory, session.id != selectedSessionID else { continue }
-                if GitCLI.normalizePath(pwd) == normalized {
-                    session.needsAttention = true
-                }
-            }
-        }
-        updateDockBadge()
-    }
-
     func clearAttention(for sessionID: UUID) {
         if let session = sessions.first(where: { $0.id == sessionID }) {
             session.needsAttention = false
         }
-        updateDockBadge()
-    }
-
-    private func updateDockBadge() {
-        let count = sessions.filter(\.needsAttention).count
-        NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
+        runtime.updateDockBadge()
     }
 
     // MARK: - Lookup
-
-    private func findSession(for ptr: ghostty_surface_t) -> TerminalSession? {
-        sessions.first { $0.surfaceView?.surface == ptr }
-    }
 
     private func session(for id: UUID) -> TerminalSession? {
         sessions.first { $0.id == id }
     }
 
-    // MARK: - Actions
-
-    private func handleAction(target: ghostty_target_s, action: ghostty_action_s) -> Bool {
-        let surfacePtr: ghostty_surface_t? = target.tag == GHOSTTY_TARGET_SURFACE
-            ? target.target.surface : nil
-
-        switch action.tag {
-        case GHOSTTY_ACTION_RENDER:
-            return true
-
-        case GHOSTTY_ACTION_SET_TITLE:
-            guard let surfacePtr, let session = findSession(for: surfacePtr) else { return true }
-            let title = String(cString: action.action.set_title.title)
-            DispatchQueue.main.async {
-                session.title = title
-            }
-            return true
-
-        case GHOSTTY_ACTION_PWD:
-            guard let surfacePtr, let session = findSession(for: surfacePtr) else { return true }
-            let pwd = String(cString: action.action.pwd.pwd)
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                // Under @Observable, views that read `session.workingDirectory`
-                // (and `manager.sessions`) re-render automatically — no manual
-                // invalidation needed.
-                session.workingDirectory = pwd
-                self.refreshGitMonitoring()
-            }
-            return true
-
-        case GHOSTTY_ACTION_NEW_TAB:
-            DispatchQueue.main.async { [weak self] in self?.createSession() }
-            return true
-
-        case GHOSTTY_ACTION_CLOSE_TAB, GHOSTTY_ACTION_CLOSE_WINDOW:
-            guard let surfacePtr, let session = findSession(for: surfacePtr) else { return true }
-            DispatchQueue.main.async { [weak self] in self?.closeSession(session) }
-            return true
-
-        case GHOSTTY_ACTION_SHOW_CHILD_EXITED:
-            guard let surfacePtr, let session = findSession(for: surfacePtr) else { return true }
-            DispatchQueue.main.async { session.isRunning = false }
-            return true
-
-        case GHOSTTY_ACTION_START_SEARCH:
-            guard let surfacePtr, let session = findSession(for: surfacePtr) else { return true }
-            let needle = String(cString: action.action.start_search.needle)
-            DispatchQueue.main.async { [weak self] in
-                self?.activateSearch(for: session.id, query: needle)
-                self?.searchFocusToken &+= 1
-            }
-            return true
-
-        case GHOSTTY_ACTION_END_SEARCH:
-            guard let surfacePtr, let session = findSession(for: surfacePtr) else { return true }
-            DispatchQueue.main.async { [weak self] in
-                self?.clearSearchState(for: session.id)
-            }
-            return true
-
-        case GHOSTTY_ACTION_SEARCH_TOTAL:
-            guard let surfacePtr, let session = findSession(for: surfacePtr) else { return true }
-            let rawTotal = Int(action.action.search_total.total)
-            DispatchQueue.main.async { [weak self] in
-                self?.updateSearchTotal(rawTotal >= 0 ? rawTotal : nil, for: session.id)
-            }
-            return true
-
-        case GHOSTTY_ACTION_SEARCH_SELECTED:
-            guard let surfacePtr, let session = findSession(for: surfacePtr) else { return true }
-            let rawSelected = Int(action.action.search_selected.selected)
-            DispatchQueue.main.async { [weak self] in
-                self?.updateSearchSelection(rawSelected >= 0 ? rawSelected : nil, for: session.id)
-            }
-            return true
-
-        case GHOSTTY_ACTION_MOUSE_SHAPE:
-            return true
-
-        default:
-            return false
-        }
-    }
-
-    private func refreshGitMonitoring() {
-        guard gitIntegrationEnabled else {
-            gitLookupsByPath = [:]
-            gitStatusesByRoot = [:]
-            gitRepositoryService.reset()
-            return
-        }
-
-        // Active sessions + pinned paths from all profiles (for sidebar badges)
-        var allPaths = sessions.compactMap(\.workingDirectory) + pinnedPaths
-        for profile in profiles {
-            allPaths.append(contentsOf: profile.pinnedPaths)
-        }
-        gitRepositoryService.track(paths: Array(Set(allPaths)))
-    }
+    // MARK: - Selection / search internals (also driven by AppRuntime's action routing)
 
     private func handleSelectedSessionChange(from previous: UUID?, to current: UUID?) {
         // Pause rendering on the old tab, resume on the new one
@@ -817,7 +561,7 @@ final class TerminalManager {
         clearSearchState(for: previous)
     }
 
-    private func activateSearch(for sessionID: UUID, query: String) {
+    func activateSearch(for sessionID: UUID, query: String) {
         if let existing = searchState,
            existing.sessionID != sessionID,
            let existingSession = session(for: existing.sessionID) {
@@ -831,18 +575,18 @@ final class TerminalManager {
         searchState = TerminalSearchState(sessionID: sessionID, query: query)
     }
 
-    private func clearSearchState(for sessionID: UUID) {
+    func clearSearchState(for sessionID: UUID) {
         guard searchState?.sessionID == sessionID else { return }
         searchState = nil
     }
 
-    private func updateSearchTotal(_ total: Int?, for sessionID: UUID) {
+    func updateSearchTotal(_ total: Int?, for sessionID: UUID) {
         guard var state = searchState, state.sessionID == sessionID else { return }
         state.totalMatches = total
         searchState = state
     }
 
-    private func updateSearchSelection(_ selected: Int?, for sessionID: UUID) {
+    func updateSearchSelection(_ selected: Int?, for sessionID: UUID) {
         guard var state = searchState, state.sessionID == sessionID else { return }
         state.selectedMatch = selected
         searchState = state

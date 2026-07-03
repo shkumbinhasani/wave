@@ -340,10 +340,13 @@ struct Sidebar: View {
             .padding(.top, 10)
             .padding(.bottom, 2)
 
-            // Groups — horizontally paginated per profile
+            // Groups — horizontally paginated per profile.
             // AppKit-backed pager: each page renders once into a cached layer; the
             // swipe just translates layers (GPU), so paging stays smooth no matter
             // how heavy a page is. SwiftUI re-renders a page only on data changes.
+            // Every window shows the pager; switching is global. The active page
+            // shows THIS window's tabs (sessions are per-window); the profile's
+            // stored tab set itself lives in the primary window.
             ProfilePager(
                 pageCount: manager.profiles.count,
                 activeIndex: manager.activeProfileIndex,
@@ -392,7 +395,7 @@ struct Sidebar: View {
             }
         }
         .popover(isPresented: $showThemeEditor, arrowEdge: .trailing) {
-            ThemeEditor()
+            ThemeEditor(theme: manager.theme)
         }
     }
 
@@ -849,6 +852,17 @@ struct TabRow: View {
             manager.selectedSessionID = session.id
             manager.focusedGroupIndex = nil
         }
+        .contextMenu {
+            Button("Move to New Window") {
+                AppRuntime.shared.tearOut(sessionID: session.id, at: nil)
+            }
+
+            Divider()
+
+            Button("Close Tab") {
+                manager.closeSession(session)
+            }
+        }
         .onChange(of: session.needsAttention) { _, needs in
             if needs {
                 withAnimation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true)) {
@@ -862,6 +876,8 @@ struct TabRow: View {
         }
         .onDrag {
             DragState.draggedSessionID = session.id
+            // Watch for this drag ending unclaimed outside every window → tear-out.
+            TearOutDetector.begin(sessionID: session.id)
             return NSItemProvider(object: session.id.uuidString as NSString)
         }
         .onDrop(of: [UTType.text], delegate: TabDropDelegate(
@@ -927,12 +943,17 @@ struct TabDropDelegate: DropDelegate {
         guard let draggedID = DragState.draggedSessionID,
               draggedID != targetSession.id else { return true }
 
-        withAnimation(.easeInOut(duration: 0.2)) {
-            if landAtEnd {
-                manager.moveSessionToEndOfGroup(draggedID, in: directory)
-            } else {
-                manager.moveSession(draggedID, before: targetSession.id, in: directory)
+        if manager.sessions.contains(where: { $0.id == draggedID }) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                if landAtEnd {
+                    manager.moveSessionToEndOfGroup(draggedID, in: directory)
+                } else {
+                    manager.moveSession(draggedID, before: targetSession.id, in: directory)
+                }
             }
+        } else {
+            // Dragged from another window — adopt it into this one.
+            AppRuntime.shared.transferSession(draggedID, to: manager)
         }
         return true
     }
@@ -963,8 +984,12 @@ struct GroupDropDelegate: DropDelegate {
         isTargeted = false
         guard let draggedID = DragState.draggedSessionID else { return false }
         DragState.draggedSessionID = nil
-        withAnimation(.easeInOut(duration: 0.2)) {
-            manager.moveSessionToEndOfGroup(draggedID, in: directory)
+        if manager.sessions.contains(where: { $0.id == draggedID }) {
+            withAnimation(.easeInOut(duration: 0.2)) {
+                manager.moveSessionToEndOfGroup(draggedID, in: directory)
+            }
+        } else {
+            AppRuntime.shared.transferSession(draggedID, to: manager)
         }
         return true
     }
@@ -1182,10 +1207,14 @@ struct TerminalSurface: View {
 }
 
 struct SidebarWindowControls: View {
+    @Environment(TerminalManager.self) private var manager
+
     var body: some View {
         HStack(spacing: 8) {
             WindowDot(color: Color(red: 1.0, green: 0.37, blue: 0.33)) {
-                performWindowAction { $0.close() }
+                performWindowAction { window in
+                    if manager.confirmWindowClose() { window.close() }
+                }
             }
             WindowDot(color: Color(red: 1.0, green: 0.74, blue: 0.18)) {
                 performWindowAction { window in
@@ -1210,7 +1239,10 @@ struct SidebarWindowControls: View {
     }
 
     private func performWindowAction(_ action: (NSWindow) -> Void) {
-        guard let window = NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first(where: { $0.isVisible }) else {
+        // Act on this manager's own window — with multiple windows open, the
+        // key/main window may be a different one.
+        guard let window = manager.window
+            ?? NSApp.keyWindow ?? NSApp.mainWindow ?? NSApp.windows.first(where: { $0.isVisible }) else {
             return
         }
 

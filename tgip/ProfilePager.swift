@@ -83,12 +83,42 @@ final class PagerScrollView: NSScrollView {
         }
     }
 
+    private enum ScrollAxis { case horizontal, vertical }
+    /// Axis locked for the current trackpad gesture (incl. its momentum) so a
+    /// swipe is either paging OR vertical scrolling — never a bit of both.
+    private var lockedAxis: ScrollAxis?
+
     private func handleScroll(_ event: NSEvent) -> NSEvent? {
         guard let window, event.window === window, pages.count > 1 else { return event }
         let pointInSelf = convert(event.locationInWindow, from: nil)
         guard bounds.contains(pointInSelf) else { return event }
-        // Vertical-dominant → let the page scroll itself.
-        guard abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) else { return event }
+
+        let dx = abs(event.scrollingDeltaX)
+        let dy = abs(event.scrollingDeltaY)
+        let axis: ScrollAxis
+
+        if event.phase != [] || event.momentumPhase != [] {
+            // Trackpad gesture: a new touch starts undecided; the first real
+            // movement locks the axis until the gesture (and momentum) ends.
+            if event.phase == .mayBegin || event.phase == .began {
+                lockedAxis = nil
+            }
+            if lockedAxis == nil, dx + dy > 0 {
+                lockedAxis = dx > dy ? .horizontal : .vertical
+            }
+            guard let locked = lockedAxis else { return event }
+            axis = locked
+        } else {
+            // Legacy wheel: no gesture phases — decide per event.
+            axis = dx > dy ? .horizontal : .vertical
+        }
+
+        // Vertical → let the page scroll itself.
+        guard axis == .horizontal else { return event }
+
+        // Momentum tail: the page was committed at finger-lift — swallow these
+        // so they neither wiggle the pager nor postpone the switch.
+        if event.momentumPhase != [] { return nil }
 
         burstDX += event.scrollingDeltaX
         // Live follow, but clamped to the immediate neighbours so a burst commits at
@@ -99,7 +129,15 @@ final class PagerScrollView: NSScrollView {
         let x = min(max(contentView.bounds.origin.x - event.scrollingDeltaX, lo), hi)
         contentView.setBoundsOrigin(NSPoint(x: x, y: 0))
         reflectScrolledClipView(contentView)
-        scheduleSnap()
+
+        if event.phase == .ended || event.phase == .cancelled {
+            // Fingers lifted — commit now instead of waiting out the momentum.
+            snapWorkItem?.cancel()
+            snapToNearestPage()
+        } else {
+            // Mid-gesture safety net + legacy wheels (no phases).
+            scheduleSnap()
+        }
         return nil  // consume — don't let the inner view also act on it
     }
 
@@ -188,14 +226,15 @@ final class PagerScrollView: NSScrollView {
         if burstDX <= -threshold { target = clamp(displayedIndex + 1) }
         else if burstDX >= threshold { target = clamp(displayedIndex - 1) }
         burstDX = 0
+        let changed = target != displayedIndex
         displayedIndex = target
         lastReported = target
-        // Slide first (pure Core Animation over already-rendered pages); run the
-        // heavy profile switch only AFTER the slide settles, so the expensive state
-        // change + re-render storm don't stutter the animation.
-        scroll(toPage: target, animated: true) { [weak self] in
-            guard let self, self.displayedIndex == target else { return }
-            self.onSwitch?(target)
+        // Slide and switch concurrently — same as clicking the profile bar,
+        // where the theme change animates alongside the page slide. Waiting
+        // for the slide to settle made the theme recolor feel laggy.
+        scroll(toPage: target, animated: true)
+        if changed {
+            onSwitch?(target)
         }
     }
 }
