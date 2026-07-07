@@ -803,6 +803,35 @@ struct TabRow: View {
                 .opacity(isDropTarget && !dropAtEnd ? 1 : 0)
 
             HStack(spacing: 8) {
+                if let agent = session.agentKind {
+                    let glyphTint = session.agentStatus.isAttention
+                        ? session.agentStatus.color
+                        : agent.tint
+                    Group {
+                        if let asset = agent.assetName, !agent.logoIsTemplate {
+                            // Brand-color logo (e.g. Claude) — untinted.
+                            Image(asset)
+                                .renderingMode(.original)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(width: 13, height: 13)
+                        } else if let asset = agent.assetName {
+                            // Monochrome logo — tinted like the SF Symbols.
+                            Image(asset)
+                                .renderingMode(.template)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                                .frame(width: 13, height: 13)
+                                .foregroundStyle(glyphTint)
+                        } else {
+                            Image(systemName: agent.symbol)
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(glyphTint)
+                        }
+                    }
+                    .help("\(agent.displayName) — \(session.agentStatus.rawValue)")
+                }
+
                 Text(session.title)
                     .font(.system(size: 13, weight: isSelected ? .medium : .regular))
                     .foregroundStyle(foreground(isSelected ? 0.95 : 0.72))
@@ -830,7 +859,7 @@ struct TabRow: View {
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(
-                        session.needsAttention ? Color.orange.opacity(attentionPulse ? 0.14 : 0.06) :
+                        session.needsAttention ? session.agentStatus.color.opacity(attentionPulse ? 0.16 : 0.06) :
                         isSelected ? foreground(0.12) :
                         (hovering || isTabFocused) ? foreground(0.06) :
                         Color.clear

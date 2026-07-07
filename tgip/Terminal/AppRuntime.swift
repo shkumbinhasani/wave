@@ -1,6 +1,7 @@
 import SwiftUI
 import GhosttyKit
 import Observation
+import UserNotifications
 
 /// App-level state shared by every window: the ghostty runtime, the profiles
 /// list and their stored tab sets, git monitoring, attention routing, and the
@@ -16,7 +17,7 @@ final class AppRuntime {
 
     @ObservationIgnored let ghostty: GhosttyRuntime
     @ObservationIgnored private let gitRepositoryService: GitRepositoryService
-    @ObservationIgnored private let attentionMonitor = AttentionMonitor()
+    @ObservationIgnored private let agentMonitor = AgentMonitor()
 
     /// Open windows' managers in creation order. The first is the "primary"
     /// window — the one whose tabs swap in and out on profile switches.
@@ -91,11 +92,11 @@ final class AppRuntime {
             self?.handleAction(target: target, action: action) ?? false
         }
 
-        // Attention monitor — highlight tabs when external tools need input
-        attentionMonitor.onAttention = { [weak self] sessionID, cwd in
-            self?.handleAttention(sessionID: sessionID, cwd: cwd)
+        // Agent monitor — track coding-agent lifecycle and flag tabs for attention
+        agentMonitor.onEvent = { [weak self] event in
+            self?.handleAgentEvent(event)
         }
-        attentionMonitor.start()
+        agentMonitor.start()
 
         saveProfilesNow()
     }
@@ -413,35 +414,100 @@ final class AppRuntime {
         gitRepositoryService.track(paths: Array(Set(allPaths)))
     }
 
-    // MARK: - Attention
+    // MARK: - Agent lifecycle
 
-    private func handleAttention(sessionID: UUID?, cwd: String?) {
-        if let sessionID {
-            // Exact match — only highlight the specific tab
-            if let (manager, session) = findSession(id: sessionID),
-               session.id != manager.selectedSessionID {
-                session.needsAttention = true
+    private func handleAgentEvent(_ event: AgentMonitor.Event) {
+        // A real session id always wins and is matched exactly — never fall back
+        // to directory matching for it, or a closed/stale id would light up an
+        // unrelated tab.
+        if let sessionID = event.sessionID {
+            if let (manager, session) = findSession(id: sessionID) {
+                apply(event, to: session, viewing: isViewing(session, in: manager))
+                updateDockBadge()
             }
-        } else if let cwd {
-            // Fallback for non-Wave terminals — match by working directory
-            let normalized = GitCLI.normalizePath(cwd)
-            guard !normalized.isEmpty else { return }
-            for manager in windows {
-                for session in manager.sessions {
-                    guard let pwd = session.workingDirectory,
-                          session.id != manager.selectedSessionID else { continue }
-                    if GitCLI.normalizePath(pwd) == normalized {
-                        session.needsAttention = true
-                    }
-                }
-            }
+            return
         }
+
+        // No session id (a non-Wave / SSH agent): match by working directory,
+        // but only when it maps to exactly one tab — otherwise it's ambiguous
+        // and lighting up multiple tabs is worse than doing nothing.
+        guard let cwd = event.cwd else { return }
+        let normalized = GitCLI.normalizePath(cwd)
+        guard !normalized.isEmpty else { return }
+        let matches = windows.flatMap { manager in
+            manager.sessions
+                .filter { GitCLI.normalizePath($0.workingDirectory ?? "") == normalized }
+                .map { (manager, $0) }
+        }
+        guard matches.count == 1, let (manager, session) = matches.first else { return }
+        apply(event, to: session, viewing: isViewing(session, in: manager))
         updateDockBadge()
+    }
+
+    /// True when the user is actively looking at this exact tab right now.
+    private func isViewing(_ session: TerminalSession, in manager: TerminalManager) -> Bool {
+        session.id == manager.selectedSessionID
+            && (manager.window?.isKeyWindow ?? false)
+            && NSApp.isActive
+    }
+
+    private func apply(_ event: AgentMonitor.Event, to session: TerminalSession, viewing: Bool) {
+        let action = event.action
+
+        // Track which agent lives in this tab.
+        if action.marksAgentActive, let agent = event.agent {
+            session.agentKind = agent
+        } else if action == .sessionEnd {
+            session.agentKind = nil
+        }
+        session.agentStatus = action.status
+
+        if action.status.isAttention {
+            // Flag + notify whenever the user isn't looking right at this tab —
+            // that includes Wave being focused on a *different* tab.
+            session.needsAttention = !viewing
+            if !viewing {
+                postDesktopNotification(for: session, action: action)
+            }
+        } else {
+            // Active again (start/prompt) or session ended — no pending badge.
+            session.needsAttention = false
+        }
     }
 
     func updateDockBadge() {
         let count = windows.reduce(0) { $0 + $1.sessions.filter(\.needsAttention).count }
         NSApp.dockTile.badgeLabel = count > 0 ? "\(count)" : nil
+    }
+
+    /// Bring a tab to the front (used when a notification is clicked).
+    func focusSession(id: UUID) {
+        guard let (manager, session) = findSession(id: id) else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        manager.window?.makeKeyAndOrderFront(nil)
+        manager.selectedSessionID = session.id
+    }
+
+    // MARK: - Desktop notifications
+
+    /// Post a native notification. The caller only invokes this when the user
+    /// isn't looking at the tab, so this always posts; `willPresent` (in
+    /// AppDelegate) makes the banner show even while Wave is frontmost.
+    private func postDesktopNotification(for session: TerminalSession, action: AgentAction) {
+        let content = UNMutableNotificationContent()
+        let agentName = session.agentKind?.displayName ?? "Agent"
+        let location = session.workingDirectory.map { ($0 as NSString).lastPathComponent }
+        content.title = location.map { "\(agentName) · \($0)" } ?? agentName
+        content.body = action == .notify ? "Needs your input" : "Finished"
+        content.sound = .default
+        content.userInfo = ["sessionID": session.id.uuidString]
+
+        let request = UNNotificationRequest(
+            identifier: UUID().uuidString,
+            content: content,
+            trigger: nil
+        )
+        UNUserNotificationCenter.current().add(request)
     }
 
     // MARK: - Ghostty actions
@@ -461,6 +527,15 @@ final class AppRuntime {
             let title = String(cString: action.action.set_title.title)
             DispatchQueue.main.async {
                 session.title = title
+                // Identify the agent straight from the title. Sticky: once an
+                // agent is detected we keep it even if the title later changes
+                // (agents update their title as they work).
+                if let kind = AgentKind.detect(fromTitle: title) {
+                    if session.agentKind != kind {
+                        session.agentKind = kind
+                        if session.agentStatus == .idle { session.agentStatus = .running }
+                    }
+                }
             }
             return true
 

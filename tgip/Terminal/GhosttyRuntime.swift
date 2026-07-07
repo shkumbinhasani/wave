@@ -133,6 +133,21 @@ class GhosttyRuntime {
         setenv("WAVE_SESSION_ID", sessionID, 1)
         defer { unsetenv("WAVE_SESSION_ID") }
 
+        // Prepend our agent-shim dir so the `claude` shim (which injects
+        // notification hooks) wins on PATH. Restore afterwards so the app's own
+        // PATH is untouched.
+        let originalPath = ProcessInfo.processInfo.environment["PATH"]
+        let shimDir = AgentHookInstaller.shimDirectory
+        if let originalPath {
+            setenv("PATH", "\(shimDir):\(originalPath)", 1)
+        } else {
+            setenv("PATH", shimDir, 1)
+        }
+        defer {
+            if let originalPath { setenv("PATH", originalPath, 1) }
+            else { unsetenv("PATH") }
+        }
+
         var cfg = ghostty_surface_config_new()
         cfg.userdata = Unmanaged.passUnretained(view).toOpaque()
         cfg.platform_tag = GHOSTTY_PLATFORM_MACOS
