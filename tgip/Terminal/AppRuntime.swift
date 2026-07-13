@@ -13,6 +13,9 @@ final class AppRuntime {
 
     private enum DefaultsKey {
         static let gitIntegrationEnabled = "git.enabled"
+        static let resumableTabsEnabled = "experimental.resumableTabs"
+        static let resumableWorkspace = "resumableWorkspace"
+        static let pendingTmuxDeletions = "resumableWorkspace.pendingDeletions"
     }
 
     @ObservationIgnored let ghostty: GhosttyRuntime
@@ -35,6 +38,16 @@ final class AppRuntime {
     /// Bridges `openWindow` out of the view layer so drags can spawn windows.
     @ObservationIgnored var openWindowAction: ((UUID) -> Void)?
 
+    /// Experimental: new local tabs run inside local tmux sessions (`wave-N`)
+    /// that survive quitting/updating Wave and can be resumed here or from
+    /// Wave for iPad over SSH. Off = exactly the classic spawn path.
+    var resumableTabsEnabled: Bool = UserDefaults.standard.bool(forKey: DefaultsKey.resumableTabsEnabled) {
+        didSet {
+            guard oldValue != resumableTabsEnabled else { return }
+            UserDefaults.standard.set(resumableTabsEnabled, forKey: DefaultsKey.resumableTabsEnabled)
+        }
+    }
+
     var gitIntegrationEnabled: Bool = UserDefaults.standard.object(forKey: DefaultsKey.gitIntegrationEnabled) as? Bool ?? true {
         didSet {
             guard oldValue != gitIntegrationEnabled else { return }
@@ -56,6 +69,20 @@ final class AppRuntime {
     private var storedSessions: [UUID: [TerminalSession]] = [:]
     /// Per-profile selected session.
     private var storedSelectedSession: [UUID: UUID?] = [:]
+    /// Restore records not yet attached to a live tab. They remain here across
+    /// transient tmux/filesystem failures and are merged into every disk save.
+    @ObservationIgnored private var pendingResumableManifest = ResumableWorkspace.merging(
+        pending: ResumableWorkspace.decode(
+            UserDefaults.standard.data(forKey: DefaultsKey.resumableWorkspace)
+        ),
+        live: ResumableCreationRecovery.load()
+    )
+    @ObservationIgnored private var claimedResumableProfiles = Set<UUID>()
+    @ObservationIgnored private var resumableClaimWaiters: [UUID: [() -> Void]] = [:]
+    @ObservationIgnored private var pendingTmuxDeletions = ResumableWorkspace.decode(
+        UserDefaults.standard.data(forKey: DefaultsKey.pendingTmuxDeletions)
+    )
+    @ObservationIgnored private var tmuxDeletionsInFlight = Set<String>()
 
     private(set) var gitLookupsByPath: [String: GitPathLookup] = [:]
     private(set) var gitStatusesByRoot: [String: GitRepoStatus] = [:]
@@ -99,6 +126,8 @@ final class AppRuntime {
         agentMonitor.start()
 
         saveProfilesNow()
+        startTmuxIdentityPolling()
+        retryPendingTmuxDeletions()
     }
 
     // MARK: - Window registry
@@ -200,12 +229,23 @@ final class AppRuntime {
     // MARK: - Profile stored tab sets (used by the primary window's switches)
 
     func storeSessions(_ sessions: [TerminalSession], selected: UUID?, forProfileID id: UUID) {
-        storedSessions[id] = sessions
+        var merged = storedSessions[id] ?? []
+        for session in sessions where !merged.contains(where: { $0.id == session.id }) {
+            merged.append(session)
+        }
+        storedSessions[id] = merged
         storedSelectedSession[id] = selected
     }
 
+    func appendStoredSession(_ session: TerminalSession, forProfileID id: UUID) {
+        guard !storedSessions[id, default: []].contains(where: { $0.id == session.id }) else { return }
+        storedSessions[id, default: []].append(session)
+    }
+
     func takeStoredSessions(forProfileID id: UUID) -> (sessions: [TerminalSession], selected: UUID?) {
-        (storedSessions[id] ?? [], storedSelectedSession[id].flatMap { $0 })
+        let sessions = storedSessions.removeValue(forKey: id) ?? []
+        let selected = storedSelectedSession.removeValue(forKey: id).flatMap { $0 }
+        return (sessions, selected)
     }
 
     /// Read-only tab set for a profile's sidebar preview page: the primary
@@ -241,15 +281,35 @@ final class AppRuntime {
         // storage, which is destroyed below.
         let fallback = index > 0 ? index - 1 : 1
         for manager in windows where manager.activeProfileIndex == index {
+            let needsReplacementSession = !manager.isMain
+            if needsReplacementSession { manager.destroySessionsForProfileDeletion() }
             manager.switchToProfile(fallback)
+            if needsReplacementSession, manager.sessions.isEmpty { manager.createSession() }
         }
 
         // Destroy the profile's stored sessions (incl. any just stashed).
+        // Deleting a profile is an explicit close — its tmux sessions die too.
         for session in storedSessions[profileID] ?? [] {
             session.surfaceView?.destroySurface()
+            if let name = session.tmuxSessionName {
+                requestTmuxSessionDeletion(
+                    name: name,
+                    tabID: session.id,
+                    title: session.title,
+                    workingDirectory: session.workingDirectory,
+                    profileID: profileID
+                )
+            }
         }
         storedSessions.removeValue(forKey: profileID)
         storedSelectedSession.removeValue(forKey: profileID)
+
+        let pending = resumableRecords(forProfileID: profileID)
+        for record in pending {
+            requestTmuxSessionDeletion(record, profileID: profileID)
+        }
+        discardResumableRecords(pending, forProfileID: profileID)
+        scheduleResumableManifestSave()
 
         profiles.remove(at: index)
 
@@ -280,6 +340,251 @@ final class AppRuntime {
         guard profiles.indices.contains(index) else { return }
         profiles[index].icon = icon
         saveProfilesNow()
+    }
+
+    // MARK: - Resumable tabs (tmux-backed)
+
+    /// Set by the app delegate the moment termination is approved. Window
+    /// teardown consults it: quit keeps tmux sessions alive, close kills them.
+    @ObservationIgnored private(set) var isTerminating = false
+
+    @ObservationIgnored private var manifestSaveWorkItem: DispatchWorkItem?
+    @ObservationIgnored private var didWarnTmuxMissing = false
+    @ObservationIgnored private var tmuxPollTimer: Timer?
+    @ObservationIgnored private var tmuxPollInFlight = false
+
+    /// tmux names already claimed by live tabs in this app (any window or
+    /// stored profile set) — excluded when allocating, alongside the server's
+    /// own live list.
+    func knownTmuxSessionNames() -> Set<String> {
+        var names = Set<String>()
+        for manager in windows {
+            for session in manager.sessions {
+                if let name = session.tmuxSessionName { names.insert(name) }
+            }
+        }
+        for sessions in storedSessions.values {
+            for session in sessions {
+                if let name = session.tmuxSessionName { names.insert(name) }
+            }
+        }
+        for records in pendingResumableManifest.values {
+            for record in records { names.insert(record.tmuxName) }
+        }
+        return names
+    }
+
+    /// Approve termination: from here on, window teardown must not kill tmux
+    /// sessions — they are the whole point. Writes the restore manifest.
+    func prepareForTermination() {
+        isTerminating = true
+        saveResumableManifestNow()
+    }
+
+    func scheduleResumableManifestSave() {
+        manifestSaveWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.saveResumableManifestNow() }
+        manifestSaveWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    /// Snapshot every live resumable tab, grouped by profile. Multi-window
+    /// layouts collapse into their profile's tab list — windows aren't
+    /// re-created on restore, tabs are.
+    func saveResumableManifestNow() {
+        manifestSaveWorkItem?.cancel()
+        var live: ResumableWorkspace.Manifest = [:]
+
+        func record(_ session: TerminalSession, profileID: UUID) {
+            guard let name = session.tmuxSessionName else { return }
+            live[profileID.uuidString, default: []].append(ResumableTabRecord(
+                id: session.id,
+                tmuxName: name,
+                title: session.title,
+                workingDirectory: session.workingDirectory
+            ))
+        }
+
+        for manager in windows {
+            let profileID = manager.activeProfile.id
+            for session in manager.sessions { record(session, profileID: profileID) }
+        }
+        for (token, session) in pendingTearOutSessions {
+            guard let profileIndex = pendingTearOutProfiles[token],
+                  profiles.indices.contains(profileIndex) else { continue }
+            record(session, profileID: profiles[profileIndex].id)
+        }
+        for (profileID, sessions) in storedSessions {
+            for session in sessions { record(session, profileID: profileID) }
+        }
+
+        let manifest = ResumableWorkspace.merging(
+            pending: pendingResumableManifest,
+            live: live
+        )
+        if let data = ResumableWorkspace.encode(manifest) {
+            UserDefaults.standard.set(data, forKey: DefaultsKey.resumableWorkspace)
+        }
+    }
+
+    func resumableRecords(forProfileID id: UUID) -> [ResumableTabRecord] {
+        pendingResumableManifest[id.uuidString] ?? []
+    }
+
+    /// Only one window may restore a profile's pending records at a time.
+    func claimResumableRecords(forProfileID id: UUID) -> [ResumableTabRecord]? {
+        guard claimedResumableProfiles.insert(id).inserted else { return nil }
+        return resumableRecords(forProfileID: id)
+    }
+
+    func releaseResumableRecordsClaim(forProfileID id: UUID) {
+        claimedResumableProfiles.remove(id)
+        let waiters = resumableClaimWaiters.removeValue(forKey: id) ?? []
+        waiters.forEach { $0() }
+    }
+
+    func whenResumableRecordsClaimAvailable(forProfileID id: UUID, perform action: @escaping () -> Void) {
+        resumableClaimWaiters[id, default: []].append(action)
+    }
+
+    /// Records leave the pending set only after attachment succeeds or tmux
+    /// definitively proves that the named session is missing/foreign.
+    func discardResumableRecords(_ records: [ResumableTabRecord], forProfileID id: UUID) {
+        pendingResumableManifest = ResumableWorkspace.removing(
+            records,
+            from: pendingResumableManifest,
+            profileID: id
+        )
+        ResumableCreationRecovery.remove(records, profileID: id)
+    }
+
+    func requestTmuxSessionDeletion(
+        name: String,
+        tabID: UUID,
+        title: String,
+        workingDirectory: String?,
+        profileID: UUID
+    ) {
+        requestTmuxSessionDeletion(
+            ResumableTabRecord(
+                id: tabID,
+                tmuxName: name,
+                title: title,
+                workingDirectory: workingDirectory
+            ),
+            profileID: profileID
+        )
+    }
+
+    private func requestTmuxSessionDeletion(_ record: ResumableTabRecord, profileID: UUID) {
+        let key = profileID.uuidString
+        if !pendingTmuxDeletions[key, default: []].contains(where: {
+            $0.id == record.id || $0.tmuxName == record.tmuxName
+        }) {
+            pendingTmuxDeletions[key, default: []].append(record)
+        }
+        pendingResumableManifest = ResumableWorkspace.removing(
+            [record],
+            from: pendingResumableManifest,
+            profileID: profileID
+        )
+        savePendingTmuxDeletions()
+        ResumableCreationRecovery.remove([record], profileID: profileID)
+        attemptTmuxSessionDeletion(record, profileID: profileID)
+    }
+
+    private func retryPendingTmuxDeletions() {
+        for (rawProfileID, records) in pendingTmuxDeletions {
+            guard let profileID = UUID(uuidString: rawProfileID) else { continue }
+            pendingResumableManifest = ResumableWorkspace.removing(
+                records,
+                from: pendingResumableManifest,
+                profileID: profileID
+            )
+            ResumableCreationRecovery.remove(records, profileID: profileID)
+            for record in records {
+                attemptTmuxSessionDeletion(record, profileID: profileID)
+            }
+        }
+    }
+
+    private func attemptTmuxSessionDeletion(_ record: ResumableTabRecord, profileID: UUID) {
+        let operationID = "\(record.tmuxName):\(record.id.uuidString)"
+        guard tmuxDeletionsInFlight.insert(operationID).inserted else { return }
+        TmuxIntegration.killSession(record.tmuxName, tabID: record.id) { [weak self] complete in
+            guard let self else { return }
+            self.tmuxDeletionsInFlight.remove(operationID)
+            guard complete else { return }
+            self.pendingTmuxDeletions = ResumableWorkspace.removing(
+                [record],
+                from: self.pendingTmuxDeletions,
+                profileID: profileID
+            )
+            self.savePendingTmuxDeletions()
+        }
+    }
+
+    private func savePendingTmuxDeletions() {
+        if pendingTmuxDeletions.isEmpty {
+            UserDefaults.standard.removeObject(forKey: DefaultsKey.pendingTmuxDeletions)
+        } else if let data = ResumableWorkspace.encode(pendingTmuxDeletions) {
+            UserDefaults.standard.set(data, forKey: DefaultsKey.pendingTmuxDeletions)
+        }
+    }
+
+    /// One-time notice when a resumable-tabs profile has no tmux installed.
+    func noteTmuxMissingOnce() {
+        guard !didWarnTmuxMissing else { return }
+        didWarnTmuxMissing = true
+        let alert = NSAlert()
+        alert.messageText = "tmux Not Installed"
+        alert.informativeText = "Resumable tabs need tmux (brew install tmux). Until then, this profile opens regular tabs."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    /// The tmux server consumes the shell's OSC 7, so `GHOSTTY_ACTION_PWD`
+    /// never fires for resumable tabs. Poll pane identity in one batched
+    /// query and feed the same cwd-grouping path instead.
+    private func startTmuxIdentityPolling() {
+        guard TmuxIntegration.isAvailable else { return }
+        let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
+            self?.pollTmuxIdentities()
+        }
+        timer.tolerance = 0.5
+        RunLoop.main.add(timer, forMode: .common)
+        tmuxPollTimer = timer
+    }
+
+    private func pollTmuxIdentities() {
+        retryPendingTmuxDeletions()
+        guard !tmuxPollInFlight else { return }
+        var flagged: [(TerminalSession, String)] = []
+        for manager in windows {
+            for session in manager.sessions {
+                if let name = session.tmuxSessionName { flagged.append((session, name)) }
+            }
+        }
+        guard !flagged.isEmpty else { return }
+        tmuxPollInFlight = true
+
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let identities = TmuxIntegration.paneIdentities()
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.tmuxPollInFlight = false
+                var changed = false
+                for (session, name) in flagged {
+                    guard let identity = identities[name] else { continue }
+                    if !identity.path.isEmpty, session.workingDirectory != identity.path {
+                        session.workingDirectory = identity.path
+                        changed = true
+                    }
+                }
+                if changed { self.refreshGitMonitoring() }
+            }
+        }
     }
 
     // MARK: - Per-profile workspace data (written by whichever window is on it)

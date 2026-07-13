@@ -36,16 +36,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard AppRuntime.shared.shouldConfirmAppQuit() else {
+            // Quit (or an updater relaunch) preserves resumable tmux sessions;
+            // the manifest reopens them on the next launch.
+            AppRuntime.shared.prepareForTermination()
             return .terminateNow
         }
 
         let alert = NSAlert()
         alert.messageText = "Quit Wave?"
-        alert.informativeText = "One or more terminal tabs still have running processes. Quitting will close them."
+        alert.informativeText = "One or more terminal tabs still have running processes. Quitting will close them. Resumable tabs keep running and reopen on next launch."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Quit")
         alert.addButton(withTitle: "Cancel")
-        return alert.runModal() == .alertFirstButtonReturn ? .terminateNow : .terminateCancel
+        guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
+        AppRuntime.shared.prepareForTermination()
+        return .terminateNow
     }
 
     // MARK: - Move to /Applications

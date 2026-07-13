@@ -157,25 +157,20 @@ class GhosttyRuntime {
         cfg.scale_factor = Double(view.window?.backingScaleFactor
             ?? NSScreen.main?.backingScaleFactor ?? 2.0)
 
-        if let pwd = view.initialWorkingDirectory {
-            pwd.withCString { ptr in
-                cfg.working_directory = ptr
-                if let input = view.initialInput {
-                    input.withCString { iPtr in
-                        cfg.initial_input = iPtr
-                        view.surface = ghostty_surface_new(app, &cfg)
-                    }
-                } else {
-                    view.surface = ghostty_surface_new(app, &cfg)
-                }
-            }
-        } else if let input = view.initialInput {
-            input.withCString { iPtr in
-                cfg.initial_input = iPtr
-                view.surface = ghostty_surface_new(app, &cfg)
-            }
-        } else {
-            view.surface = ghostty_surface_new(app, &cfg)
+        // Ghostty copies config strings during surface_new; the duplicates
+        // only need to outlive the call.
+        let pwdPtr = view.initialWorkingDirectory.map { strdup($0) }
+        let inputPtr = view.initialInput.map { strdup($0) }
+        let commandPtr = view.spawnCommand.map { strdup($0) }
+        defer {
+            pwdPtr.map { free($0) }
+            inputPtr.map { free($0) }
+            commandPtr.map { free($0) }
         }
+        if let pwdPtr { cfg.working_directory = UnsafePointer(pwdPtr) }
+        if let inputPtr { cfg.initial_input = UnsafePointer(inputPtr) }
+        if let commandPtr { cfg.command = UnsafePointer(commandPtr) }
+
+        view.surface = ghostty_surface_new(app, &cfg)
     }
 }

@@ -48,6 +48,7 @@ final class TerminalManager {
     var presentedGitDiff: GitDiffPresentation?
 
     @ObservationIgnored private var didTeardown = false
+    @ObservationIgnored private var pendingResumableCreations = 0
 
     var selectedSession: TerminalSession? {
         sessions.first { $0.id == selectedSessionID }
@@ -205,16 +206,10 @@ final class TerminalManager {
             sessions = stored.sessions
             selectedSessionID = stored.selected
 
-            // Ensure at least one session
-            if sessions.isEmpty {
-                createSession()
-            } else if selectedSessionID == nil {
-                selectedSessionID = sessions.first?.id
-            }
-
-            // Resume rendering on the newly selected tab
-            if let current = selectedSessionID {
-                sessions.first { $0.id == current }?.surfaceView?.isActiveTab = true
+            let profileID = newProfile.id
+            restoreResumableTabs { [weak self] _ in
+                guard let self, self.activeProfile.id == profileID else { return }
+                self.finishProfileActivation()
             }
         }
 
@@ -278,23 +273,235 @@ final class TerminalManager {
             let session = TerminalSession(title: host)
             session.workingDirectory = "ssh://\(host)"
             let view = TerminalSurfaceView(runtime: ghostty, session: session, initialInput: input)
-            session.surfaceView = view
-            sessions.append(session)
-            selectedSessionID = session.id
+            appendCreatedSession(session, view: view)
+        } else if runtime.resumableTabsEnabled, TmuxIntegration.isAvailable {
+            createResumableSession(in: pwd)
+            return
         } else {
-            // Local session
-            let session = TerminalSession(title: "Terminal \(sessions.count + 1)")
-            session.workingDirectory = pwd
-            let view = TerminalSurfaceView(runtime: ghostty, session: session, workingDirectory: pwd)
-            session.surfaceView = view
-            sessions.append(session)
-            selectedSessionID = session.id
+            if runtime.resumableTabsEnabled { runtime.noteTmuxMissingOnce() }
+            createPlainLocalSession(in: pwd)
         }
+    }
 
-        // New session becomes selected, so selectedSessionID didSet handles activation
+    private func createPlainLocalSession(in directory: String?) {
+        let session = TerminalSession(title: "Terminal \(sessions.count + 1)")
+        session.workingDirectory = directory
+        let view = TerminalSurfaceView(runtime: ghostty, session: session, workingDirectory: directory)
+        appendCreatedSession(session, view: view)
+    }
+
+    private func createResumableSession(in directory: String?) {
+        let tabID = UUID()
+        pendingResumableCreations += 1
+        let title = "Terminal \(sessions.count + pendingResumableCreations)"
+        let profileID = activeProfile.id
+        let knownNames = runtime.knownTmuxSessionNames()
+        let runtime = runtime
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = TmuxIntegration.createSession(
+                tabID: tabID,
+                workingDirectory: directory,
+                avoiding: knownNames
+            ) { name in
+                ResumableCreationRecovery.add(
+                    ResumableTabRecord(
+                        id: tabID,
+                        tmuxName: name,
+                        title: title,
+                        workingDirectory: directory
+                    ),
+                    profileID: profileID
+                )
+            }
+            let recoveryRecord: ResumableTabRecord?
+            switch result {
+            case let .ready(name, _), let .cleanupRequired(name):
+                recoveryRecord = ResumableTabRecord(
+                    id: tabID,
+                    tmuxName: name,
+                    title: title,
+                    workingDirectory: directory
+                )
+            case .failed:
+                recoveryRecord = nil
+            }
+
+            DispatchQueue.main.async {
+                self?.pendingResumableCreations -= 1
+                guard !runtime.isTerminating else { return }
+                guard let self, !self.didTeardown,
+                      runtime.profiles.contains(where: { $0.id == profileID })
+                else {
+                    if let recoveryRecord {
+                        runtime.requestTmuxSessionDeletion(
+                            name: recoveryRecord.tmuxName,
+                            tabID: recoveryRecord.id,
+                            title: recoveryRecord.title,
+                            workingDirectory: recoveryRecord.workingDirectory,
+                            profileID: profileID
+                        )
+                    }
+                    return
+                }
+
+                let tmuxName: String?
+                let command: String?
+                switch result {
+                case let .ready(name, preparedCommand):
+                    tmuxName = name
+                    command = preparedCommand
+                case let .cleanupRequired(name):
+                    runtime.requestTmuxSessionDeletion(
+                        name: name,
+                        tabID: tabID,
+                        title: title,
+                        workingDirectory: directory,
+                        profileID: profileID
+                    )
+                    tmuxName = nil
+                    command = nil
+                case .failed:
+                    tmuxName = nil
+                    command = nil
+                }
+
+                let session = TerminalSession(
+                    title: title,
+                    id: tabID,
+                    tmuxSessionName: tmuxName
+                )
+                session.workingDirectory = directory
+                let view = TerminalSurfaceView(
+                    runtime: self.ghostty,
+                    session: session,
+                    workingDirectory: directory,
+                    spawnCommand: command
+                )
+                session.surfaceView = view
+
+                if !self.isMain || self.activeProfile.id == profileID {
+                    self.appendCreatedSession(session, view: view)
+                } else {
+                    runtime.appendStoredSession(session, forProfileID: profileID)
+                }
+                if tmuxName != nil {
+                    runtime.saveResumableManifestNow()
+                    if let recoveryRecord {
+                        ResumableCreationRecovery.remove([recoveryRecord], profileID: profileID)
+                    }
+                }
+            }
+        }
+    }
+
+    private func appendCreatedSession(_ session: TerminalSession, view: TerminalSurfaceView) {
+        session.surfaceView = view
+        sessions.append(session)
+        selectedSessionID = session.id
 
         focusedGroupIndex = nil
         runtime.refreshGitMonitoring()
+    }
+
+    /// Existing resumable sessions restore regardless of the creation toggle;
+    /// that preference controls new tabs only.
+    func restoreResumableTabs(completion: @escaping (Bool) -> Void = { _ in }) {
+        let profileID = activeProfile.id
+        guard TmuxIntegration.isAvailable else { completion(false); return }
+        guard let records = runtime.claimResumableRecords(forProfileID: profileID) else {
+            runtime.whenResumableRecordsClaimAvailable(forProfileID: profileID) { [weak self] in
+                guard let self, !self.didTeardown, self.activeProfile.id == profileID else {
+                    completion(false)
+                    return
+                }
+                self.restoreResumableTabs(completion: completion)
+            }
+            return
+        }
+        guard !records.isEmpty else {
+            runtime.releaseResumableRecordsClaim(forProfileID: profileID)
+            completion(false)
+            return
+        }
+        let runtime = runtime
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var attachable: [(ResumableTabRecord, String)] = []
+            var discardable: [ResumableTabRecord] = []
+
+            for record in records {
+                switch TmuxIntegration.sessionMatch(record.tmuxName, tabID: record.id) {
+                case .owned:
+                    if let command = TmuxIntegration.prepareRestoreCommand(
+                        sessionName: record.tmuxName, tabID: record.id
+                    ) {
+                        attachable.append((record, command))
+                    }
+                case .missing, .foreign:
+                    discardable.append(record)
+                case .unavailable:
+                    break
+                }
+            }
+
+            DispatchQueue.main.async {
+                guard let self else {
+                    runtime.releaseResumableRecordsClaim(forProfileID: profileID)
+                    completion(false)
+                    return
+                }
+                guard !self.didTeardown, self.activeProfile.id == profileID else {
+                    runtime.releaseResumableRecordsClaim(forProfileID: profileID)
+                    completion(false)
+                    return
+                }
+
+                var resolved = discardable
+                for (record, command) in attachable {
+                    if self.sessions.contains(where: {
+                        $0.id == record.id || $0.tmuxSessionName == record.tmuxName
+                    }) {
+                        resolved.append(record)
+                        continue
+                    }
+
+                    let session = TerminalSession(
+                        title: record.title,
+                        id: record.id,
+                        tmuxSessionName: record.tmuxName
+                    )
+                    session.workingDirectory = record.workingDirectory
+                    let view = TerminalSurfaceView(
+                        runtime: self.ghostty,
+                        session: session,
+                        workingDirectory: record.workingDirectory,
+                        spawnCommand: command
+                    )
+                    session.surfaceView = view
+                    self.sessions.append(session)
+                    resolved.append(record)
+                }
+
+                self.runtime.discardResumableRecords(resolved, forProfileID: profileID)
+                if self.selectedSessionID == nil { self.selectedSessionID = self.sessions.last?.id }
+                self.runtime.refreshGitMonitoring()
+                if !resolved.isEmpty { self.runtime.scheduleResumableManifestSave() }
+                runtime.releaseResumableRecordsClaim(forProfileID: profileID)
+                completion(!attachable.isEmpty)
+            }
+        }
+    }
+
+    private func finishProfileActivation() {
+        if sessions.isEmpty {
+            createSession()
+        } else if selectedSessionID == nil {
+            selectedSessionID = sessions.first?.id
+        }
+        if let current = selectedSessionID {
+            sessions.first { $0.id == current }?.surfaceView?.isActiveTab = true
+        }
     }
 
     func closeSession(_ session: TerminalSession) {
@@ -304,6 +511,18 @@ final class TerminalManager {
 
     private func closeSessionNow(_ session: TerminalSession) {
         session.surfaceView?.destroySurface()
+        // Close means close: an explicitly closed resumable tab kills its tmux
+        // session (only quit/update keeps them for restore).
+        if let name = session.tmuxSessionName {
+            runtime.requestTmuxSessionDeletion(
+                name: name,
+                tabID: session.id,
+                title: session.title,
+                workingDirectory: session.workingDirectory,
+                profileID: activeProfile.id
+            )
+            runtime.scheduleResumableManifestSave()
+        }
         sessions.removeAll { $0.id == session.id }
         if selectedSessionID == session.id {
             selectedSessionID = sessions.last?.id
@@ -370,6 +589,29 @@ final class TerminalManager {
         selectedSessionID = session.id
         focusedGroupIndex = nil
         runtime.refreshGitMonitoring()
+        // A resumable tab may have changed profile ownership — re-snapshot.
+        if session.tmuxSessionName != nil { runtime.scheduleResumableManifestSave() }
+    }
+
+    /// Profile deletion is an explicit close for every window, including
+    /// secondary windows that normally keep their tabs while switching.
+    func destroySessionsForProfileDeletion() {
+        for session in sessions {
+            session.surfaceView?.destroySurface()
+            if let name = session.tmuxSessionName {
+                runtime.requestTmuxSessionDeletion(
+                    name: name,
+                    tabID: session.id,
+                    title: session.title,
+                    workingDirectory: session.workingDirectory,
+                    profileID: activeProfile.id
+                )
+            }
+        }
+        sessions.removeAll()
+        selectedSessionID = nil
+        runtime.scheduleResumableManifestSave()
+        runtime.refreshGitMonitoring()
     }
 
     /// Destroy this window's sessions and leave the registry. Called when the
@@ -379,7 +621,20 @@ final class TerminalManager {
         didTeardown = true
         for session in sessions {
             session.surfaceView?.destroySurface()
+            // Closing a window closes its tabs — kill their tmux sessions.
+            // App termination (quit/update) is the exception: sessions stay
+            // alive and the manifest restores them on relaunch.
+            if let name = session.tmuxSessionName, !runtime.isTerminating {
+                runtime.requestTmuxSessionDeletion(
+                    name: name,
+                    tabID: session.id,
+                    title: session.title,
+                    workingDirectory: session.workingDirectory,
+                    profileID: activeProfile.id
+                )
+            }
         }
+        if !runtime.isTerminating { runtime.scheduleResumableManifestSave() }
         sessions.removeAll()
         selectedSessionID = nil
         runtime.unregister(self)

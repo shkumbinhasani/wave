@@ -76,7 +76,13 @@ struct WindowRoot: View {
                     }
                     manager.adopt(session)
                 } else if manager.sessions.isEmpty {
-                    manager.createSession()
+                    // Reopen resumable tabs that survived the last quit/update
+                    // before falling back to a fresh tab.
+                    let profileID = manager.activeProfile.id
+                    manager.restoreResumableTabs { _ in
+                        guard manager.activeProfile.id == profileID else { return }
+                        if manager.sessions.isEmpty { manager.createSession() }
+                    }
                 }
             }
     }
@@ -247,6 +253,19 @@ private struct AppSettingsView: View {
             Toggle("Enable Git integration", isOn: $runtime.gitIntegrationEnabled)
 
             Text("Shows repository dirty badges and enables the uncommitted diff inspector.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Divider()
+
+            Text("EXPERIMENTAL")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            Toggle("Resumable tabs (tmux)", isOn: $runtime.resumableTabsEnabled)
+
+            Text("New local tabs run inside tmux sessions that survive quitting or updating Wave, and can be resumed here or from Wave for iPad over SSH. Requires tmux (brew install tmux). Scrollback in these tabs uses tmux copy-mode. Closing a tab still kills its session.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

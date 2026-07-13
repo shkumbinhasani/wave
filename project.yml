@@ -38,7 +38,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.wave.terminal
         PRODUCT_NAME: wave
-        MARKETING_VERSION: "0.8.0"
+        MARKETING_VERSION: "0.8.1"
         CURRENT_PROJECT_VERSION: "1"
         INFOPLIST_FILE: tgip/Info.plist
         CODE_SIGN_ENTITLEMENTS: tgip/tgip.entitlements
@@ -82,6 +82,7 @@ targets:
       - path: tgip/Git/GitDiffComposer.swift
       - path: tgip/GitSupport.swift
       - path: tgip/Theme/ThemeStore.swift
+      - path: tgip/Terminal/ResumableWorkspace.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.wave.tests

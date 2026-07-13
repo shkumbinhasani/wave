@@ -24,12 +24,16 @@ class TerminalSurfaceView: NSView {
 
     var initialWorkingDirectory: String?
     var initialInput: String?
+    /// Command to run instead of the default shell (resumable tabs run their
+    /// tmux launcher here). A single argv token — Ghostty word-splits it.
+    var spawnCommand: String?
 
-    init(runtime: GhosttyRuntime, session: TerminalSession, workingDirectory: String? = nil, initialInput: String? = nil) {
+    init(runtime: GhosttyRuntime, session: TerminalSession, workingDirectory: String? = nil, initialInput: String? = nil, spawnCommand: String? = nil) {
         self.runtime = runtime
         self.session = session
         self.initialWorkingDirectory = workingDirectory
         self.initialInput = initialInput
+        self.spawnCommand = spawnCommand
         super.init(frame: .zero)
         wantsLayer = true
         layer?.isOpaque = true
