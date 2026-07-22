@@ -155,6 +155,11 @@ enum TmuxIntegration {
         for key in ["GHOSTTY_RESOURCES_DIR", "GHOSTTY_BIN_DIR"] {
             if let value = appEnv[key] { env[key] = value }
         }
+        // tmux advertises truecolor to Ghostty on its own (the xterm-ghostty
+        // terminfo has RGB), but apps that sniff $COLORTERM instead of terminfo
+        // — delta, bat, some Neovim setups — downgrade to 256 colors without
+        // it. GUI apps don't inherit COLORTERM, so set it explicitly.
+        env["COLORTERM"] = appEnv["COLORTERM"].flatMap { $0.isEmpty ? nil : $0 } ?? "truecolor"
         if let lang = appEnv["LANG"], !lang.isEmpty {
             env["LANG"] = lang
         } else if let lang = derivedLANG {
@@ -195,13 +200,29 @@ enum TmuxIntegration {
     /// the mobile app's SSH login starts it first, every shell it ever spawns
     /// is cut off from the user's keychain and Touch ID. Starting the server
     /// from the app wins that race; `exit-empty off` keeps the empty server
-    /// alive until sessions arrive. The option is only set on a server this
-    /// app just started, never on one the user already runs.
+    /// alive until sessions arrive.
+    ///
+    /// These are all server-scoped options, so they only run when this app
+    /// actually started the server — never on one the user already runs, whose
+    /// config we must not touch. On a Wave-started server they restore the
+    /// terminal capabilities tmux drops by default but Ghostty supports:
+    /// OSC 52 clipboard, extended (CSI-u) keys, focus events, and the
+    /// xterm-ghostty feature set (truecolor, styled underlines, cursor shape,
+    /// OSC 8 hyperlinks). All enabling-only — they add capability, never
+    /// remove it. `-a` appends the feature entry without clobbering built-ins.
     private static func ensureServerStartedFromGUISession() {
         if let probe = runResult(["list-sessions"], captureOutput: false), probe.status == 0 {
             return
         }
-        _ = runStatus(["start-server", ";", "set-option", "-s", "exit-empty", "off"])
+        _ = runStatus([
+            "start-server",
+            ";", "set-option", "-s", "exit-empty", "off",
+            ";", "set-option", "-s", "set-clipboard", "on",
+            ";", "set-option", "-s", "extended-keys", "on",
+            ";", "set-option", "-s", "focus-events", "on",
+            ";", "set-option", "-sa", "terminal-features",
+            "xterm-ghostty:RGB:usstyle:ccolour:cstyle:focus:hyperlinks:overline:strikethrough:sync:title",
+        ])
     }
 
     /// If a server is already running from an SSH login, repair what can be
@@ -433,6 +454,13 @@ enum TmuxIntegration {
             "#{?#{!=:#{pane_title},#{host}},#{pane_title},#{b:pane_current_path}}",
         ])
         _ = runStatus(["set-option", "-t", "=\(name):", "history-limit", "\(historyLimit)"])
+        // Ghostty sees the whole tmux client as one alternate-screen app, so
+        // without mouse tracking it converts the scroll wheel into arrow keys
+        // that reach the inner shell instead of scrolling. Turning mouse on
+        // makes tmux advertise tracking, so Ghostty forwards real wheel events
+        // that scroll the scrollback (and still reach inner apps that grab the
+        // mouse). Shift-drag keeps Ghostty's native text selection.
+        _ = runStatus(["set-option", "-t", "=\(name):", "mouse", "on"])
         _ = runStatus(["set-option", "-w", "-t", "=\(name):", "window-size", "latest"])
         _ = runStatus(["set-option", "-w", "-t", "=\(name):", "aggressive-resize", "on"])
         _ = runStatus(["set-option", "-w", "-t", "=\(name):", "allow-passthrough", "on"])
