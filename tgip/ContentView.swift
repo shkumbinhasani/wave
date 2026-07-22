@@ -809,7 +809,7 @@ struct TabRow: View {
                         : agent.tint
                     Group {
                         if let asset = agent.assetName, !agent.logoIsTemplate {
-                            // Brand-color logo (e.g. Claude) — untinted.
+                            // Brand-color logo (Claude, OpenCode) — untinted.
                             Image(asset)
                                 .renderingMode(.original)
                                 .resizable()

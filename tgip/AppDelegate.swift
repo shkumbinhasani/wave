@@ -5,6 +5,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
     func applicationDidFinishLaunching(_ notification: Notification) {
         moveToApplicationsIfNeeded()
         AgentHookInstaller.installAll()
+        TmuxIntegration.prepareAtLaunch()
 
         let center = UNUserNotificationCenter.current()
         center.delegate = self

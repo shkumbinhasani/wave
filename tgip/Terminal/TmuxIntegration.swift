@@ -69,15 +69,154 @@ enum TmuxIntegration {
         }
         return environment
     }()
-    private static let ghosttySessionEnvironment: [String: String] = {
-        let environment = ProcessInfo.processInfo.environment
-        let keys = ["GHOSTTY_RESOURCES_DIR", "GHOSTTY_BIN_DIR", "TERMINFO", "TERMINFO_DIRS"]
-        return Dictionary(uniqueKeysWithValues: keys.compactMap { key in
-            environment[key].map { (key, $0) }
-        })
+    static var isAvailable: Bool { binaryPath != nil }
+
+    // MARK: - Provisioned environment
+
+    /// A wave session outlives the app, so nothing volatile may be baked into
+    /// it: paths must survive app updates, dev builds, and re-logins. Stable
+    /// values live under `~/.wave` on paths Wave controls; the one genuinely
+    /// rotating value (the ssh-agent socket) is reached through a symlink that
+    /// Wave re-points instead of being baked in directly.
+    private static var waveDirectory: String {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".wave").path
+    }
+
+    static var agentSocketLink: String { "\(waveDirectory)/ssh-agent.sock" }
+    private static var terminfoDirectory: String { "\(waveDirectory)/terminfo" }
+    private static let terminfoMarker = ".wave-source"
+
+    /// Re-point `~/.wave/ssh-agent.sock` at the current launchd agent socket.
+    /// Cheap and idempotent — runs at launch and before every attach, so
+    /// long-lived shells hold a path that never goes stale.
+    static func refreshAgentSocketLink() {
+        guard let sock = processEnvironment["SSH_AUTH_SOCK"], !sock.isEmpty,
+              sock != agentSocketLink else { return }
+        let fm = FileManager.default
+        try? fm.createDirectory(atPath: waveDirectory, withIntermediateDirectories: true)
+        if (try? fm.destinationOfSymbolicLink(atPath: agentSocketLink)) == sock { return }
+        let staging = "\(agentSocketLink).\(getpid())"
+        try? fm.removeItem(atPath: staging)
+        guard (try? fm.createSymbolicLink(atPath: staging, withDestinationPath: sock)) != nil
+        else { return }
+        if rename(staging, agentSocketLink) != 0 {
+            try? fm.removeItem(atPath: staging)
+        }
+    }
+
+    /// Copy the bundled terminfo to `~/.wave/terminfo`. The bundle path moves
+    /// with every app update / dev build while the sessions holding it live
+    /// on. A marker keyed on source path + build skips redundant copies; the
+    /// swap goes through staging so readers never see a half-written tree.
+    static func provisionTerminfo() {
+        let fm = FileManager.default
+        guard let resources = Bundle.main.resourcePath else { return }
+        let source = "\(resources)/terminfo"
+        guard fm.fileExists(atPath: source) else { return }
+
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
+        let stamp = "\(source)|\(build)"
+        let markerPath = "\(terminfoDirectory)/\(terminfoMarker)"
+        if (try? String(contentsOfFile: markerPath, encoding: .utf8)) == stamp { return }
+
+        try? fm.createDirectory(atPath: waveDirectory, withIntermediateDirectories: true)
+        let staging = "\(terminfoDirectory).staging"
+        let retired = "\(terminfoDirectory).old"
+        try? fm.removeItem(atPath: staging)
+        try? fm.removeItem(atPath: retired)
+        guard (try? fm.copyItem(atPath: source, toPath: staging)) != nil else { return }
+        try? stamp.write(toFile: "\(staging)/\(terminfoMarker)", atomically: true, encoding: .utf8)
+        try? fm.moveItem(atPath: terminfoDirectory, toPath: retired)
+        guard (try? fm.moveItem(atPath: staging, toPath: terminfoDirectory)) != nil else {
+            try? fm.moveItem(atPath: retired, toPath: terminfoDirectory)
+            return
+        }
+        try? fm.removeItem(atPath: retired)
+    }
+
+    /// The environment baked into a wave session at creation and refreshed on
+    /// every attach. Curated, never inherited raw: the agent socket goes
+    /// through the stable symlink and terminfo through the `~/.wave` copy.
+    static func curatedSessionEnvironment() -> [String: String] {
+        var env: [String: String] = [:]
+        let fm = FileManager.default
+        if (try? fm.destinationOfSymbolicLink(atPath: agentSocketLink)) != nil {
+            env["SSH_AUTH_SOCK"] = agentSocketLink
+        }
+        let appEnv = ProcessInfo.processInfo.environment
+        if fm.fileExists(atPath: terminfoDirectory) {
+            env["TERMINFO"] = terminfoDirectory
+            env["TERMINFO_DIRS"] = terminfoDirectory
+        } else {
+            for key in ["TERMINFO", "TERMINFO_DIRS"] {
+                if let value = appEnv[key] { env[key] = value }
+            }
+        }
+        for key in ["GHOSTTY_RESOURCES_DIR", "GHOSTTY_BIN_DIR"] {
+            if let value = appEnv[key] { env[key] = value }
+        }
+        if let lang = appEnv["LANG"], !lang.isEmpty {
+            env["LANG"] = lang
+        } else if let lang = derivedLANG {
+            env["LANG"] = lang
+        }
+        return env
+    }
+
+    /// GUI apps get no LANG, and a tmux server born over SSH often has a wrong
+    /// one (`C.UTF-8`). Derive a UTF-8 locale the system actually ships.
+    private static let derivedLANG: String? = {
+        guard let language = Locale.current.language.languageCode?.identifier,
+              let region = Locale.current.region?.identifier,
+              language.range(of: "^[A-Za-z]{2,3}$", options: .regularExpression) != nil,
+              region.range(of: "^[A-Za-z]{2}$", options: .regularExpression) != nil
+        else { return "en_US.UTF-8" }
+        let candidate = "\(language)_\(region).UTF-8"
+        return FileManager.default.fileExists(atPath: "/usr/share/locale/\(candidate)")
+            ? candidate : "en_US.UTF-8"
     }()
 
-    static var isAvailable: Bool { binaryPath != nil }
+    // MARK: - Launch-time provisioning
+
+    /// Called once at app launch, off the main thread. Ordering matters: the
+    /// agent-socket symlink must exist before the server environment
+    /// references it.
+    static func prepareAtLaunch() {
+        workQueue.async {
+            guard isAvailable else { return }
+            refreshAgentSocketLink()
+            provisionTerminfo()
+            ensureServerStartedFromGUISession()
+            healServerEnvironment()
+        }
+    }
+
+    /// A tmux server inherits the security session of whoever starts it. If
+    /// the mobile app's SSH login starts it first, every shell it ever spawns
+    /// is cut off from the user's keychain and Touch ID. Starting the server
+    /// from the app wins that race; `exit-empty off` keeps the empty server
+    /// alive until sessions arrive. The option is only set on a server this
+    /// app just started, never on one the user already runs.
+    private static func ensureServerStartedFromGUISession() {
+        if let probe = runResult(["list-sessions"], captureOutput: false), probe.status == 0 {
+            return
+        }
+        _ = runStatus(["start-server", ";", "set-option", "-s", "exit-empty", "off"])
+    }
+
+    /// If a server is already running from an SSH login, repair what can be
+    /// repaired in place: agent socket via the stable symlink, and the SSH
+    /// markers removed so new shells don't inherit a remote-looking
+    /// environment. The security session itself can't be healed — only the
+    /// bootstrap above winning the race fixes that.
+    private static func healServerEnvironment() {
+        if (try? FileManager.default.destinationOfSymbolicLink(atPath: agentSocketLink)) != nil {
+            _ = runStatus(["set-environment", "-g", "SSH_AUTH_SOCK", agentSocketLink])
+        }
+        for key in ["SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY"] {
+            _ = runStatus(["set-environment", "-gu", key])
+        }
+    }
 
     // MARK: - Queries
 
@@ -210,6 +349,7 @@ enum TmuxIntegration {
         avoiding reserved: Set<String>,
         onSessionCreated: (String) -> Void
     ) -> CreationResult {
+        refreshAgentSocketLink()
         for _ in 0..<5 {
             let name = allocateSessionName(avoiding: reserved)
             let suffix = tabID.uuidString.prefix(8)
@@ -220,7 +360,7 @@ enum TmuxIntegration {
                 "-e", "WAVE_SESSION_ID=\(tabID.uuidString)",
                 "-e", "PATH=\(sessionPath)",
             ]
-            for (key, value) in ghosttySessionEnvironment.sorted(by: { $0.key < $1.key }) {
+            for (key, value) in curatedSessionEnvironment().sorted(by: { $0.key < $1.key }) {
                 args += ["-e", "\(key)=\(value)"]
             }
             args += [
@@ -272,8 +412,19 @@ enum TmuxIntegration {
             "set-environment", "-t", "=\(name)", "PATH", sessionPath,
         ]) == 0 else { return false }
 
+        // Refresh the curated environment so panes opened after this attach
+        // pick up current values; running shells keep working through the
+        // stable symlink/copies these point at.
+        refreshAgentSocketLink()
+        for (key, value) in curatedSessionEnvironment().sorted(by: { $0.key < $1.key }) {
+            _ = runStatus(["set-environment", "-t", "=\(name)", key, value])
+        }
+
         // All options are targeted. Failures are non-fatal for compatibility
         // with older tmux versions, but no user's global options are changed.
+        // update-environment is emptied so an attach from another device (the
+        // mobile app over SSH) can never overwrite or strip the session env.
+        _ = runStatus(["set-option", "-t", "=\(name):", "update-environment", ""])
         _ = runStatus(["set-option", "-t", "=\(name):", "status", "off"])
         _ = runStatus(["set-option", "-t", "=\(name):", "destroy-unattached", "off"])
         _ = runStatus(["set-option", "-t", "=\(name):", "set-titles", "on"])
@@ -290,10 +441,13 @@ enum TmuxIntegration {
 
     /// The command a resumable tab's surface runs instead of the bare shell:
     /// a tiny launcher script (a single argv token, immune to Ghostty's
-    /// word-splitting) that configures the server and attaches the session.
+    /// word-splitting) that verifies ownership and attaches the session.
     ///
-    /// The script verifies ownership before attaching, so stale names can
-    /// never adopt another tab's session.
+    /// Failures print a readable reason and wait for a keypress — otherwise
+    /// the surface exits instantly and the tab closes before the user can see
+    /// what went wrong. Exit codes: 72 session missing, 73 owned by another
+    /// tab, 74 server unreachable (typically a client/server version mismatch
+    /// after a tmux upgrade).
     static func launchCommand(sessionName: String, tabID: UUID) -> String? {
         guard let tmux = binaryPath else { return nil }
 
@@ -305,12 +459,39 @@ enum TmuxIntegration {
         unset WAVE_SESSION_ID
         unset TMUX TMUX_PANE
 
-        if ! "$tmux" has-session -t "=$name" 2>/dev/null; then
-            exit 72
+        fail() {
+            printf '\\n[wave] %s\\n' "$2" >&2
+            printf '[wave] Press Return to close this tab.\\n' >&2
+            read -r __wave_ack 2>/dev/null || sleep 86400
+            exit "$1"
+        }
+
+        err=$("$tmux" has-session -t "=$name" 2>&1)
+        if [ $? -ne 0 ]; then
+            case "$err" in
+            *"can't find session"*)
+                fail 72 "This tab's session ($name) no longer exists on this machine."
+                ;;
+            *"no server running"*|*"no current session"*)
+                fail 72 "No tmux server is running, so session $name is gone."
+                ;;
+            *)
+                fail 74 "Could not reach the tmux server: $err — if tmux was upgraded while sessions were running, 'tmux kill-server' resets it (this ends all resumable sessions)."
+                ;;
+            esac
         fi
-        format="#{==:#{@wave-tab-id},$tab_id}"
-        exec "$tmux" if-shell -t "$name:" -F "$format" \
-            "attach-session -t $name" "run-shell 'exit 73'"
+
+        owner=$("$tmux" show-options -qv -t "=$name:" @wave-tab-id 2>/dev/null)
+        if [ "$owner" != "$tab_id" ]; then
+            fail 73 "Session $name belongs to another tab; refusing to attach."
+        fi
+
+        "$tmux" attach-session -t "=$name"
+        status=$?
+        if [ $status -ne 0 ]; then
+            fail "$status" "tmux exited with status $status while attached to $name."
+        fi
+        exit 0
         """
 
         let dir = scriptsDirectory

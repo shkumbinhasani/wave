@@ -429,6 +429,7 @@ final class TerminalManager {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var attachable: [(ResumableTabRecord, String)] = []
             var discardable: [ResumableTabRecord] = []
+            var sawUnavailable = false
 
             for record in records {
                 switch TmuxIntegration.sessionMatch(record.tmuxName, tabID: record.id) {
@@ -441,7 +442,7 @@ final class TerminalManager {
                 case .missing, .foreign:
                     discardable.append(record)
                 case .unavailable:
-                    break
+                    sawUnavailable = true
                 }
             }
 
@@ -488,6 +489,11 @@ final class TerminalManager {
                 self.runtime.refreshGitMonitoring()
                 if !resolved.isEmpty { self.runtime.scheduleResumableManifestSave() }
                 runtime.releaseResumableRecordsClaim(forProfileID: profileID)
+                // Records that hit .unavailable stay pending and retry next
+                // launch; if nothing restored at all, tell the user why.
+                if sawUnavailable && attachable.isEmpty {
+                    runtime.noteTmuxUnreachableOnce()
+                }
                 completion(!attachable.isEmpty)
             }
         }

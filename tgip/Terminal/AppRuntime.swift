@@ -350,6 +350,7 @@ final class AppRuntime {
 
     @ObservationIgnored private var manifestSaveWorkItem: DispatchWorkItem?
     @ObservationIgnored private var didWarnTmuxMissing = false
+    @ObservationIgnored private var didWarnTmuxUnreachable = false
     @ObservationIgnored private var tmuxPollTimer: Timer?
     @ObservationIgnored private var tmuxPollInFlight = false
 
@@ -540,6 +541,21 @@ final class AppRuntime {
         alert.messageText = "tmux Not Installed"
         alert.informativeText = "Resumable tabs need tmux (brew install tmux). Until then, this profile opens regular tabs."
         alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    /// One-time notice when resumable sessions should exist but the tmux
+    /// server didn't respond — typically a client/server protocol mismatch
+    /// after tmux was upgraded while sessions were running. Without this the
+    /// tabs silently fail to come back.
+    func noteTmuxUnreachableOnce() {
+        guard !didWarnTmuxUnreachable else { return }
+        didWarnTmuxUnreachable = true
+        let alert = NSAlert()
+        alert.messageText = "Can't Reach tmux"
+        alert.informativeText = "Your resumable tabs couldn't be restored because the tmux server didn't respond. If tmux was upgraded while sessions were running, run 'tmux kill-server' in a regular tab (this ends those sessions), then relaunch Wave. Wave will retry on the next launch."
+        alert.alertStyle = .warning
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }

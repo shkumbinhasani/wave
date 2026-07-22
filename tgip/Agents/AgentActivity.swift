@@ -30,13 +30,13 @@ enum AgentKind: String, Codable, CaseIterable {
         }
     }
 
-    /// Name of a bundled brand logo in the asset catalog (template-rendered), if
-    /// one exists. Takes precedence over `symbol`.
+    /// Name of a bundled brand logo in the asset catalog, if one exists.
+    /// Takes precedence over `symbol`.
     var assetName: String? {
         switch self {
         case .claude: return "claude-logo"
         case .opencode: return "opencode-logo"
-        default: return nil
+        case .codex, .gemini: return nil
         }
     }
 
@@ -44,7 +44,7 @@ enum AgentKind: String, Codable, CaseIterable {
     /// glyph tinted like the SF Symbols — used for marks whose native colors
     /// read poorly at tab size. When false, the logo keeps its brand colors.
     var logoIsTemplate: Bool {
-        // All brand logos render in their own colors. OpenCode ships light/dark
+        // Brand logos render in their own colors. OpenCode ships light/dark
         // appearance variants so it stays legible on either background.
         false
     }
@@ -52,7 +52,7 @@ enum AgentKind: String, Codable, CaseIterable {
     /// SF Symbol fallback used when there's no bundled `assetName`.
     var symbol: String {
         switch self {
-        case .claude: return "sparkles"
+        case .claude: return "asterisk"
         case .codex: return "chevron.left.forwardslash.chevron.right"
         case .opencode: return "curlybraces"
         case .gemini: return "diamond"
