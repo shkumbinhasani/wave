@@ -27,6 +27,12 @@ struct tgipApp: App {
             TerminalCommands()
         }
 
+        // Per-tab CPU/memory breakdown — sampling runs only while it's open.
+        Window("Wave Activity", id: "wave-activity") {
+            ActivityPanelView()
+        }
+        .defaultSize(width: 480, height: 520)
+
         Settings {
             AppSettingsView()
                 .environment(AppRuntime.shared)
@@ -161,8 +167,16 @@ private struct WindowAccessor: NSViewRepresentable {
 /// global (it drives the main window) so it stays enabled from any window.
 struct TerminalCommands: Commands {
     @FocusedValue(\.terminalManager) private var manager
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
+        CommandGroup(after: .windowList) {
+            Button("Wave Activity") {
+                openWindow(id: "wave-activity")
+            }
+            .keyboardShortcut("a", modifiers: [.command, .option])
+        }
+
         CommandGroup(after: .newItem) {
             Button("New Tab") { manager?.createSession() }
                 .keyboardShortcut("t", modifiers: .command)

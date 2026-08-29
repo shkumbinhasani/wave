@@ -327,6 +327,23 @@ enum TmuxIntegration {
         return result
     }
 
+    /// One batched read of pane shell pids for all `wave-*` sessions:
+    /// session name → pids. The tmux server is their parent, so everything a
+    /// resumable tab runs descends from these — not from Wave.
+    static func panePids() -> [String: [pid_t]] {
+        guard let out = run([
+            "list-panes", "-a", "-F", "#{session_name}\t#{pane_pid}",
+        ]) else { return [:] }
+        var result: [String: [pid_t]] = [:]
+        for line in out.split(separator: "\n") {
+            let parts = line.split(separator: "\t")
+            guard parts.count == 2, parts[0].hasPrefix(sessionPrefix),
+                  let pid = pid_t(parts[1]) else { continue }
+            result[String(parts[0]), default: []].append(pid)
+        }
+        return result
+    }
+
     // MARK: - Lifecycle
 
     static func killSession(
