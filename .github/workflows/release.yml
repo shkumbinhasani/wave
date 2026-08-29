@@ -17,7 +17,7 @@ jobs:
       - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.16.0
+          version: 0.15.2
 
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -30,11 +30,16 @@ jobs:
           key: ghosttykit-${{ runner.os }}-${{ hashFiles('.ghostty-version') }}
           restore-keys: ghosttykit-${{ runner.os }}-
 
+      # Pinned via .ghostty-version to the commit the app's GhosttyKit usage
+      # was written against — a moving tip drifts APIs and breaks the build.
       - name: Build GhosttyKit
         if: steps.cache-ghostty.outputs.cache-hit != 'true'
         run: |
-          git clone --depth 1 https://github.com/ghostty-org/ghostty.git /tmp/ghostty
-          cd /tmp/ghostty
+          GHOSTTY_REF=$(cat .ghostty-version)
+          mkdir /tmp/ghostty && cd /tmp/ghostty
+          git init -q
+          git fetch --depth 1 https://github.com/ghostty-org/ghostty.git "$GHOSTTY_REF"
+          git checkout -q FETCH_HEAD
           zig build -Demit-xcframework -Dxcframework-target=native --release=fast || true
           test -d /tmp/ghostty/macos/GhosttyKit.xcframework
           mkdir -p $GITHUB_WORKSPACE/Frameworks
