@@ -286,7 +286,14 @@ final class TerminalManager {
     private func createPlainLocalSession(in directory: String?) {
         let session = TerminalSession(title: "Terminal \(sessions.count + 1)")
         session.workingDirectory = directory
-        let view = TerminalSurfaceView(runtime: ghostty, session: session, workingDirectory: directory)
+        var input: String?
+        #if DEBUG
+        // Lets a script check what environment a plain tab's shell gets.
+        if let dump = ProcessInfo.processInfo.environment["WAVE_ENV_DUMP_FILE"], !dump.isEmpty {
+            input = " env | sort > '\(dump)'\n"
+        }
+        #endif
+        let view = TerminalSurfaceView(runtime: ghostty, session: session, workingDirectory: directory, initialInput: input)
         appendCreatedSession(session, view: view)
     }
 

@@ -139,12 +139,19 @@ class GhosttyRuntime {
         }
     }
 
+    /// The bundled terminfo database (xterm-ghostty lives here).
+    static var terminfoDirectory: String {
+        "\(Bundle.main.resourcePath ?? "")/terminfo"
+    }
+
+    /// Runs before ghostty_init, which snapshots the environment. Nothing may
+    /// call setenv after that point — see createSurface.
     private static func configureGhosttyEnvironment() {
         guard let resourcesPath = Bundle.main.resourcePath else { return }
 
         setenv("GHOSTTY_RESOURCES_DIR", resourcesPath, 1)
 
-        let terminfoPath = "\(resourcesPath)/terminfo"
+        let terminfoPath = terminfoDirectory
         setenv("TERMINFO", terminfoPath, 1)
         setenv("TERMINFO_DIRS", terminfoPath, 1)
 
@@ -176,26 +183,6 @@ class GhosttyRuntime {
     func createSurface(for view: TerminalSurfaceView) {
         guard let app else { return }
 
-        // Inject session ID so child shell (and tools like Claude Code) can identify this tab
-        let sessionID = view.session?.id.uuidString ?? ""
-        setenv("WAVE_SESSION_ID", sessionID, 1)
-        defer { unsetenv("WAVE_SESSION_ID") }
-
-        // Prepend our agent-shim dir so the `claude` shim (which injects
-        // notification hooks) wins on PATH. Restore afterwards so the app's own
-        // PATH is untouched.
-        let originalPath = ProcessInfo.processInfo.environment["PATH"]
-        let shimDir = AgentHookInstaller.shimDirectory
-        if let originalPath {
-            setenv("PATH", "\(shimDir):\(originalPath)", 1)
-        } else {
-            setenv("PATH", shimDir, 1)
-        }
-        defer {
-            if let originalPath { setenv("PATH", originalPath, 1) }
-            else { unsetenv("PATH") }
-        }
-
         var cfg = ghostty_surface_config_new()
         cfg.userdata = Unmanaged.passUnretained(view).toOpaque()
         cfg.platform_tag = GHOSTTY_PLATFORM_MACOS
@@ -205,20 +192,53 @@ class GhosttyRuntime {
         cfg.scale_factor = Double(view.window?.backingScaleFactor
             ?? NSScreen.main?.backingScaleFactor ?? 2.0)
 
+        // Per-tab environment goes through the surface config, never through
+        // setenv. Ghostty snapshots the process environment once in
+        // ghostty_init and builds every child's environment from that
+        // snapshot; a setenv/unsetenv pair afterwards reallocates environ
+        // underneath it and children come up with variables missing.
+        //
+        // TERMINFO is set here because Ghostty derives it as
+        // "<GHOSTTY_RESOURCES_DIR>/../terminfo", which for Wave's bundle
+        // layout is Contents/terminfo — a path that does not exist. Without
+        // the override the shell (and tmux) can't resolve xterm-ghostty.
+        var environment: [(key: String, value: String)] = []
+        let terminfo = Self.terminfoDirectory
+        environment.append(("TERMINFO", terminfo))
+        environment.append(("TERMINFO_DIRS", terminfo))
+        // Lets the child shell (and tools like Claude Code) identify this tab.
+        environment.append(("WAVE_SESSION_ID", view.session?.id.uuidString ?? ""))
+        // Our agent-shim dir goes first so the `claude` shim (which injects
+        // notification hooks) wins on PATH.
+        let shimDir = AgentHookInstaller.shimDirectory
+        let path = ProcessInfo.processInfo.environment["PATH"].map { "\(shimDir):\($0)" } ?? shimDir
+        environment.append(("PATH", path))
+
         // Ghostty copies config strings during surface_new; the duplicates
         // only need to outlive the call.
         let pwdPtr = view.initialWorkingDirectory.map { strdup($0) }
         let inputPtr = view.initialInput.map { strdup($0) }
         let commandPtr = view.spawnCommand.map { strdup($0) }
+        let keyPtrs = environment.map { strdup($0.key)! }
+        let valuePtrs = environment.map { strdup($0.value)! }
         defer {
             pwdPtr.map { free($0) }
             inputPtr.map { free($0) }
             commandPtr.map { free($0) }
+            keyPtrs.forEach { free($0) }
+            valuePtrs.forEach { free($0) }
         }
         if let pwdPtr { cfg.working_directory = UnsafePointer(pwdPtr) }
         if let inputPtr { cfg.initial_input = UnsafePointer(inputPtr) }
         if let commandPtr { cfg.command = UnsafePointer(commandPtr) }
 
-        view.surface = ghostty_surface_new(app, &cfg)
+        var envVars = zip(keyPtrs, valuePtrs).map { key, value in
+            ghostty_env_var_s(key: UnsafePointer(key), value: UnsafePointer(value))
+        }
+        envVars.withUnsafeMutableBufferPointer { buffer in
+            cfg.env_vars = buffer.baseAddress
+            cfg.env_var_count = buffer.count
+            view.surface = ghostty_surface_new(app, &cfg)
+        }
     }
 }

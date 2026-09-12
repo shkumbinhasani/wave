@@ -504,6 +504,14 @@ enum TmuxIntegration {
         unset WAVE_SESSION_ID
         unset TMUX TMUX_PANE
 
+        # The tmux client needs xterm-ghostty in a terminfo database it can
+        # find. Prefer the ~/.wave copy, which survives app updates; the
+        # surface environment is the fallback.
+        if [ -d \(shellQuote(terminfoDirectory)) ]; then
+            TERMINFO=\(shellQuote(terminfoDirectory)); export TERMINFO
+            TERMINFO_DIRS="$TERMINFO"; export TERMINFO_DIRS
+        fi
+
         fail() {
             printf '\\n[wave] %s\\n' "$2" >&2
             printf '[wave] Press Return to close this tab.\\n' >&2
