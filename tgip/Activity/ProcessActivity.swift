@@ -20,10 +20,29 @@ enum ProcessActivity {
     }
 
     struct ThreadReading: Identifiable {
-        let id: Int
+        /// System-wide thread id — the number `sample`, `spindump` and
+        /// Instruments print as `Thread_<id>`, so a row in the panel can be
+        /// matched to a stack in one of those tools.
+        let id: UInt64
+        /// The pthread name when the thread set one (Ghostty names its
+        /// per-surface threads), else the dispatch queue the thread was
+        /// draining, else empty.
         let name: String
         /// The kernel's recent-usage estimate for the thread, in % of one core.
         let cpuPercent: Double
+    }
+
+    /// Where Wave's own memory goes. `footprint` is the number Activity
+    /// Monitor shows; the rest split it.
+    struct MemoryBreakdown {
+        let footprint: UInt64
+        /// Heap and anonymous mappings: scrollback, glyph atlases in system
+        /// memory, Swift and AppKit objects.
+        let anonymous: UInt64
+        let compressed: UInt64
+        /// Metal textures and buffers.
+        let graphics: UInt64
+        let peakFootprint: UInt64
     }
 
     private static let timebase: (numer: UInt64, denom: UInt64) = {
@@ -37,6 +56,13 @@ enum ProcessActivity {
     private static func machTicksToNs(_ ticks: UInt64) -> UInt64 {
         ticks / timebase.denom * timebase.numer
             + ticks % timebase.denom * timebase.numer / timebase.denom
+    }
+
+    /// Seconds since the process behind `reading` started.
+    static func uptime(of reading: Reading) -> TimeInterval {
+        let now = mach_absolute_time()
+        guard now > reading.startedAt else { return 0 }
+        return Double(machTicksToNs(now - reading.startedAt)) / 1e9
     }
 
     // MARK: - Process tree
@@ -138,9 +164,10 @@ enum ProcessActivity {
 
     // MARK: - Own threads
 
-    /// Wave's own threads with the kernel's recent CPU estimate — the rows
-    /// that answer "is it the renderer or the main thread".
-    static func ownThreads(limit: Int) -> [ThreadReading] {
+    /// Every thread in Wave with the kernel's recent CPU estimate — the rows
+    /// that answer "is it the renderer, the main thread, or one of Wave's
+    /// own queues".
+    static func ownThreads() -> [ThreadReading] {
         var list: thread_act_array_t?
         var count: mach_msg_type_number_t = 0
         guard task_threads(mach_task_self_, &list, &count) == KERN_SUCCESS,
@@ -155,29 +182,99 @@ enum ProcessActivity {
         }
 
         var readings: [ThreadReading] = []
+        readings.reserveCapacity(Int(count))
         for i in 0..<Int(count) {
-            var info = thread_extended_info_data_t()
-            var infoCount = mach_msg_type_number_t(
+            var extended = thread_extended_info_data_t()
+            var extendedCount = mach_msg_type_number_t(
                 MemoryLayout<thread_extended_info_data_t>.size / MemoryLayout<natural_t>.size
             )
-            let status = withUnsafeMutablePointer(to: &info) {
-                $0.withMemoryRebound(to: integer_t.self, capacity: Int(infoCount)) {
-                    thread_info(list[i], thread_flavor_t(THREAD_EXTENDED_INFO), $0, &infoCount)
+            let extendedStatus = withUnsafeMutablePointer(to: &extended) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(extendedCount)) {
+                    thread_info(list[i], thread_flavor_t(THREAD_EXTENDED_INFO), $0, &extendedCount)
                 }
             }
-            guard status == KERN_SUCCESS else { continue }
-            let name = withUnsafeBytes(of: info.pth_name) { raw in
+            guard extendedStatus == KERN_SUCCESS else { continue }
+
+            var identity = thread_identifier_info_data_t()
+            var identityCount = mach_msg_type_number_t(
+                MemoryLayout<thread_identifier_info_data_t>.size / MemoryLayout<natural_t>.size
+            )
+            let identityStatus = withUnsafeMutablePointer(to: &identity) {
+                $0.withMemoryRebound(to: integer_t.self, capacity: Int(identityCount)) {
+                    thread_info(list[i], thread_flavor_t(THREAD_IDENTIFIER_INFO), $0, &identityCount)
+                }
+            }
+            let identified = identityStatus == KERN_SUCCESS
+
+            var name = withUnsafeBytes(of: extended.pth_name) { raw in
                 String(decoding: raw.prefix(while: { $0 != 0 }), as: UTF8.self)
             }
+            if name.isEmpty, identified {
+                name = queueLabel(at: identity.dispatch_qaddr) ?? ""
+            }
+
             readings.append(ThreadReading(
-                id: i,
-                // The main thread carries no pthread name; it is always the
-                // task's first thread.
-                name: name.isEmpty ? (i == 0 ? "Main thread" : "Thread \(i + 1)") : name,
+                id: identified ? identity.thread_id : UInt64(i),
+                name: name,
                 // pth_cpu_usage is scaled by TH_USAGE_SCALE (1000).
-                cpuPercent: Double(info.pth_cpu_usage) / 10.0
+                cpuPercent: Double(extended.pth_cpu_usage) / 10.0
             ))
         }
-        return Array(readings.sorted { $0.cpuPercent > $1.cpuPercent }.prefix(limit))
+        return readings
+    }
+
+    /// Label of the dispatch queue a thread is draining right now. libdispatch
+    /// keeps the queue pointer in a per-thread slot and publishes the slot's
+    /// address as `dispatch_qaddr`; `sample` and `spindump` read the same slot
+    /// to print "DispatchQueue_N: com.example.queue" for unnamed threads. The
+    /// main thread reports com.apple.main-thread.
+    private static func queueLabel(at address: UInt64) -> String? {
+        guard let slot = UnsafeRawPointer(bitPattern: UInt(address)),
+              let queuePointer = slot.load(as: UnsafeRawPointer?.self)
+        else { return nil }
+        // Every queue a Wave thread drains is long-lived (Wave's own com.wave.*
+        // queues, the root queues, Metal's, AppKit's), so an unretained read
+        // is safe in practice; the label is copied out at once.
+        let queue = Unmanaged<DispatchQueue>.fromOpaque(queuePointer).takeUnretainedValue()
+        let label = queue.label
+        return label.isEmpty ? nil : label
+    }
+
+    // MARK: - Own memory
+
+    static func ownMemory() -> MemoryBreakdown? {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size
+        )
+        let status = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard status == KERN_SUCCESS else { return nil }
+        return MemoryBreakdown(
+            footprint: UInt64(info.phys_footprint),
+            anonymous: UInt64(info.internal),
+            compressed: UInt64(info.compressed),
+            graphics: UInt64(max(0, info.ledger_tag_graphics_footprint)),
+            peakFootprint: UInt64(max(0, info.ledger_phys_footprint_peak))
+        )
+    }
+
+    // MARK: - Machine
+
+    /// "Apple M4 Pro" and the like.
+    static func cpuBrand() -> String? {
+        var size = 0
+        guard sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0) == 0, size > 0 else {
+            return nil
+        }
+        var buffer = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("machdep.cpu.brand_string", &buffer, &size, nil, 0) == 0 else {
+            return nil
+        }
+        let brand = String(cString: buffer)
+        return brand.isEmpty ? nil : brand
     }
 }

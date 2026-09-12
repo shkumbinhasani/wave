@@ -73,6 +73,13 @@ struct WindowRoot: View {
 
                 guard !didSetup else { return }
                 didSetup = true
+                #if DEBUG
+                // Lets a script check the activity report without touching
+                // the UI: the panel opens itself and writes the report.
+                if ProcessInfo.processInfo.environment["WAVE_ACTIVITY_REPORT_FILE"] != nil {
+                    openWindow(id: "wave-activity")
+                }
+                #endif
                 AppRuntime.shared.register(manager)
                 if let tearOutToken,
                    let session = AppRuntime.shared.claimTearOutSession(tearOutToken) {

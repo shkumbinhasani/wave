@@ -17,8 +17,8 @@ struct ContentView: View {
         @Bindable var manager = manager
         return ZStack {
             ZStack {
-                // Blur layer — always present, controlled by blur slider
-                VisualEffectView(material: .hudWindow, blendingMode: .behindWindow, emphasized: false)
+                // Glass layer — always present, controlled by blur slider
+                WindowBackdrop()
                     .opacity(theme.vibrancy)
 
                 // Solid accent fill on top — tint slider controls how much it covers the blur
@@ -69,7 +69,7 @@ struct ContentView: View {
                     .background {
                             if !manager.sidebarPinned {
                                 ZStack {
-                                    VisualEffectView(material: .hudWindow, blendingMode: .withinWindow, emphasized: false)
+                                    PanelBackdrop(cornerRadius: 12)
                                     theme.accentColor.opacity(theme.backgroundOpacity)
                                     LinearGradient(
                                         colors: [
@@ -176,9 +176,8 @@ struct ContentView: View {
 
     /// The same group list the sidebar uses — needed for confirmFocus.
     var sidebarGroups: [(fullPath: String, sessions: [TerminalSession])] {
-        buildGroups(sessions: manager.sessions, pinned: manager.pinnedPaths) {
-            manager.groupAnchor(for: $0, pinned: manager.pinnedPaths)
-        }
+        buildGroups(sessions: manager.sessions, pinned: manager.pinnedPaths,
+                    anchor: manager.groupAnchorResolver(pinned: manager.pinnedPaths))
     }
 }
 
@@ -409,12 +408,10 @@ struct Sidebar: View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 2) {
                 let profileGroups = isActive
-                    ? buildGroups(sessions: manager.sessions, pinned: manager.pinnedPaths) {
-                        manager.groupAnchor(for: $0, pinned: manager.pinnedPaths)
-                    }
-                    : buildGroups(sessions: manager.sessionsForProfile(at: index), pinned: profile.pinnedPaths) {
-                        manager.groupAnchor(for: $0, pinned: profile.pinnedPaths)
-                    }
+                    ? buildGroups(sessions: manager.sessions, pinned: manager.pinnedPaths,
+                                  anchor: manager.groupAnchorResolver(pinned: manager.pinnedPaths))
+                    : buildGroups(sessions: manager.sessionsForProfile(at: index), pinned: profile.pinnedPaths,
+                                  anchor: manager.groupAnchorResolver(pinned: profile.pinnedPaths))
                 let labels = disambiguatedLabels(for: profileGroups.map { $0.fullPath })
 
                 ForEach(Array(profileGroups.enumerated()), id: \.element.fullPath) { groupIndex, group in
@@ -1206,11 +1203,7 @@ struct TerminalSurface: View {
 
     var body: some View {
         TerminalView(sessionID: sessionID)
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .strokeBorder(theme.adaptiveForeground(opacity: 0.14), lineWidth: 1)
-            }
+            .paneChrome(fallbackRadius: cornerRadius, border: theme.adaptiveForeground(opacity: 0.14))
             .overlay(alignment: .topTrailing) {
                 if let sessionID,
                    let searchState = manager.searchState,

@@ -670,29 +670,19 @@ final class AppRuntime {
     /// else the enclosing git repo root, else the directory itself. This keeps a
     /// `cd` into a subdirectory (e.g. `apps/backend` inside a monorepo) grouped
     /// under the project instead of detaching into its own group.
-    func groupAnchor(for cwd: String, pinned: [String]) -> String {
-        let path = GitCLI.normalizePath(cwd)
-        guard !path.isEmpty else { return cwd }
-
-        // 1. Deepest pinned ancestor — explicit intent wins. Return the original
-        //    pinned string so it matches the pinned list used for ordering.
-        var bestPin: String?
-        var bestLength = -1
-        for pin in pinned {
-            let normalizedPin = GitCLI.normalizePath(pin)
-            guard !normalizedPin.isEmpty else { continue }
-            if (path == normalizedPin || path.hasPrefix(normalizedPin + "/")), normalizedPin.count > bestLength {
-                bestPin = pin
-                bestLength = normalizedPin.count
+    func groupAnchorResolver(pinned: [String]) -> (String) -> String {
+        let lookup: ((String) -> String?)?
+        if gitIntegrationEnabled {
+            let lookups = gitLookupsByPath
+            lookup = { path in
+                guard case let .repo(repository)? = lookups[path] else { return nil }
+                return repository.repoRoot
             }
+        } else {
+            lookup = nil
         }
-        if let bestPin { return bestPin }
-
-        // 2. Enclosing git repo root (deepest repo — a nested submodule gets its own group).
-        if let root = gitRepositoryInfo(for: cwd)?.repoRoot { return root }
-
-        // 3. The directory itself — unchanged behavior for loose, non-repo dirs.
-        return cwd
+        let resolver = DirectoryGroupResolver(pinned: pinned, repositoryRoot: lookup)
+        return resolver.anchor(for:)
     }
 
     func gitStatus(forGroupPath path: String) -> GitRepoStatus? {

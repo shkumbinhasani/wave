@@ -135,11 +135,7 @@ struct GitDiffInspector: View {
                 )
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .strokeBorder(theme.adaptiveForeground(opacity: 0.14), lineWidth: 1)
-        }
+        .paneChrome(fallbackRadius: cornerRadius, border: theme.adaptiveForeground(opacity: 0.14))
         .shadow(color: Color.black.opacity(0.10), radius: 20, y: 10)
         .focusable()
         .focusEffectDisabled()

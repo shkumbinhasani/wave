@@ -1,4 +1,5 @@
 import Foundation
+import GhosttyKit
 import Observation
 
 /// Samples CPU and memory for Wave itself and for every process running
@@ -33,12 +34,34 @@ final class ActivityMonitor {
         let cpuPercent: Double
         let memoryBytes: UInt64
         let processes: [ProcessRow]
+        /// Tabs only: shown in its window right now.
+        var isSelected = false
     }
 
     struct AppSample {
         let cpuPercent: Double
         let memoryBytes: UInt64
+        /// Busiest threads first, cut off at `threadLimit`.
         let threads: [ProcessActivity.ThreadReading]
+        let threadCount: Int
+        let memory: ProcessActivity.MemoryBreakdown?
+        let uptime: TimeInterval
+    }
+
+    /// Facts about the running Wave that don't change between samples but
+    /// decide what a number means: a render-heavy report from a Debug build
+    /// or a low-power laptop reads differently from a Release build on mains.
+    struct Environment {
+        let appVersion: String
+        let buildNumber: String
+        let ghosttyVersion: String
+        let ghosttyBuildMode: String
+        let debugBuild: Bool
+        let macOSVersion: String
+        let cpuBrand: String
+        let coreCount: Int
+        let lowPowerMode: Bool
+        let thermalState: String
     }
 
     private(set) var app: AppSample?
@@ -53,11 +76,15 @@ final class ActivityMonitor {
     @ObservationIgnored private var lastSampleAt: UInt64 = 0
 
     static let sampleInterval: TimeInterval = 2.0
+    static let threadLimit = 8
 
     // MARK: - Lifecycle (panel visibility drives sampling)
 
     func start() {
         guard timer == nil else { return }
+        #if DEBUG
+        scheduleReportDump()
+        #endif
         sampleNow()
         let timer = Timer(timeInterval: Self.sampleInterval, repeats: true) { [weak self] _ in
             self?.sampleNow()
@@ -72,6 +99,20 @@ final class ActivityMonitor {
         timer = nil
     }
 
+    #if DEBUG
+    /// Debug builds write the report to `$WAVE_ACTIVITY_REPORT_FILE` once
+    /// two samples are in — CPU rates need two — so the text can be checked
+    /// without driving the UI.
+    private func scheduleReportDump() {
+        guard let path = ProcessInfo.processInfo.environment["WAVE_ACTIVITY_REPORT_FILE"],
+              !path.isEmpty else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.sampleInterval * 2.5) { [weak self] in
+            guard let self else { return }
+            try? self.reportText().write(toFile: path, atomically: true, encoding: .utf8)
+        }
+    }
+    #endif
+
     // MARK: - Sampling
 
     private struct TabRef {
@@ -80,7 +121,28 @@ final class ActivityMonitor {
         let directory: String?
         let tmuxName: String?
         let agentName: String?
+        /// The tab shown in its window right now. Ghostty renders only these;
+        /// a hidden tab's renderer thread should read ~0%.
+        let isSelected: Bool
+        /// Whether the tab's window is on screen at all (not minimized, not
+        /// fully covered, not a stashed inactive profile).
+        let windowVisible: Bool
+        /// The tab's surface has been created — a restored tab that never
+        /// got a surface costs Wave nothing.
+        let hasSurface: Bool
     }
+
+    /// Counts that frame the Wave row: how many surfaces exist, how many are
+    /// on screen and should be rendering.
+    struct SurfaceCensus {
+        let windows: Int
+        let surfaces: Int
+        let visibleSurfaces: Int
+        /// Tabs of profiles that aren't live in any window. Their processes
+        /// still run; their surfaces don't render.
+        let stashedTabs: Int
+    }
+    private(set) var census = SurfaceCensus(windows: 0, surfaces: 0, visibleSurfaces: 0, stashedTabs: 0)
 
     /// Tabs across every window and every profile's stored set — inactive
     /// profiles' tmux sessions keep running and burning CPU.
@@ -88,22 +150,40 @@ final class ActivityMonitor {
         let runtime = AppRuntime.shared
         var refs: [TabRef] = []
         var seen = Set<UUID>()
-        func add(_ session: TerminalSession) {
+        var stashed = 0
+        func add(_ session: TerminalSession, selected: Bool, windowVisible: Bool) {
             guard seen.insert(session.id).inserted else { return }
             refs.append(TabRef(
                 id: session.id,
                 title: session.title,
                 directory: session.workingDirectory,
                 tmuxName: session.tmuxSessionName,
-                agentName: session.agentKind?.displayName
+                agentName: session.agentKind?.displayName,
+                isSelected: selected,
+                windowVisible: windowVisible,
+                hasSurface: session.surfaceView?.surface != nil
             ))
         }
         for manager in runtime.windows {
-            manager.sessions.forEach(add)
+            let window = manager.window
+            let visible = (window?.occlusionState.contains(.visible) ?? false)
+                && window?.isMiniaturized == false
+            for session in manager.sessions {
+                add(session, selected: session.id == manager.selectedSessionID, windowVisible: visible)
+            }
         }
         for index in runtime.profiles.indices {
-            runtime.previewSessions(forProfileAt: index).forEach(add)
+            for session in runtime.previewSessions(forProfileAt: index) where !seen.contains(session.id) {
+                stashed += 1
+                add(session, selected: false, windowVisible: false)
+            }
         }
+        census = SurfaceCensus(
+            windows: runtime.windows.count,
+            surfaces: refs.filter(\.hasSurface).count,
+            visibleSurfaces: refs.filter { $0.hasSurface && $0.isSelected && $0.windowVisible }.count,
+            stashedTabs: stashed
+        )
         return refs
     }
 
@@ -227,7 +307,8 @@ final class ActivityMonitor {
                 subtitle: subtitle.isEmpty ? nil : subtitle,
                 cpuPercent: processRows.reduce(0) { $0 + $1.cpuPercent },
                 memoryBytes: processRows.reduce(0) { $0 + $1.memoryBytes },
-                processes: processRows
+                processes: processRows,
+                isSelected: ref.isSelected && ref.windowVisible
             ))
         }
         tabGroups.sort { $0.cpuPercent > $1.cpuPercent }
@@ -272,10 +353,15 @@ final class ActivityMonitor {
 
         var appSample: AppSample?
         if let reading = ProcessActivity.reading(for: wavePid) {
+            let threads = ProcessActivity.ownThreads()
+                .sorted { $0.cpuPercent > $1.cpuPercent }
             appSample = AppSample(
                 cpuPercent: cpuPercent(reading),
                 memoryBytes: reading.memoryBytes,
-                threads: ProcessActivity.ownThreads(limit: 6)
+                threads: Array(threads.prefix(Self.threadLimit)),
+                threadCount: threads.count,
+                memory: ProcessActivity.ownMemory(),
+                uptime: ProcessActivity.uptime(of: reading)
             )
         }
 
@@ -291,25 +377,104 @@ final class ActivityMonitor {
 
     // MARK: - Report
 
+    /// Facts read once; none of them change while Wave runs.
+    static let environment: Environment = {
+        let bundle = Bundle.main
+        let info = ghostty_info()
+        let ghosttyVersion = String(
+            decoding: UnsafeRawBufferPointer(start: info.version, count: Int(info.version_len)),
+            as: UTF8.self
+        )
+        let buildMode: String
+        switch info.build_mode {
+        case GHOSTTY_BUILD_MODE_DEBUG: buildMode = "Debug"
+        case GHOSTTY_BUILD_MODE_RELEASE_SAFE: buildMode = "ReleaseSafe"
+        case GHOSTTY_BUILD_MODE_RELEASE_FAST: buildMode = "ReleaseFast"
+        case GHOSTTY_BUILD_MODE_RELEASE_SMALL: buildMode = "ReleaseSmall"
+        default: buildMode = "unknown"
+        }
+        #if DEBUG
+        let debugBuild = true
+        #else
+        let debugBuild = false
+        #endif
+        let process = ProcessInfo.processInfo
+        let thermal: String
+        switch process.thermalState {
+        case .nominal: thermal = "nominal"
+        case .fair: thermal = "fair"
+        case .serious: thermal = "serious"
+        case .critical: thermal = "critical"
+        @unknown default: thermal = "unknown"
+        }
+        return Environment(
+            appVersion: bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?",
+            buildNumber: bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "?",
+            ghosttyVersion: ghosttyVersion,
+            ghosttyBuildMode: buildMode,
+            debugBuild: debugBuild,
+            macOSVersion: process.operatingSystemVersionString,
+            cpuBrand: ProcessActivity.cpuBrand() ?? "unknown CPU",
+            coreCount: process.activeProcessorCount,
+            lowPowerMode: process.isLowPowerModeEnabled,
+            thermalState: thermal
+        )
+    }()
+
     /// Plain-text snapshot of the current sample, made to be pasted into a
-    /// chat or bug report and read without the UI.
+    /// chat or bug report and read without the UI. Every line a reader would
+    /// otherwise have to ask about — build, machine, how many surfaces are
+    /// rendering, where Wave's memory goes, which thread id to look for in
+    /// `sample` — is in the header so the paste stands on its own.
     func reportText() -> String {
+        let env = Self.environment
         var lines: [String] = []
         lines.append("Wave activity report — \(Date().formatted(date: .abbreviated, time: .standard))")
-        lines.append("Wave \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"), \(ProcessInfo.processInfo.activeProcessorCount) cores. CPU is % of one core over a \(Int(Self.sampleInterval))s interval.")
+
+        var build = "Wave \(env.appVersion) (\(env.buildNumber))"
+        if env.debugBuild { build += " DEBUG BUILD" }
+        build += ", Ghostty \(env.ghosttyVersion) \(env.ghosttyBuildMode)"
+        lines.append(build)
+
+        var machine = "\(env.cpuBrand), \(env.coreCount) cores, macOS \(env.macOSVersion)"
+        if env.lowPowerMode { machine += ", Low Power Mode on" }
+        if env.thermalState != "nominal" { machine += ", thermal state \(env.thermalState)" }
+        lines.append(machine)
+
+        if let app {
+            lines.append("Wave up \(Self.formatDuration(app.uptime)). "
+                + "\(census.windows) window\(census.windows == 1 ? "" : "s"), "
+                + "\(census.surfaces) terminal surface\(census.surfaces == 1 ? "" : "s"), "
+                + "\(census.visibleSurfaces) on screen"
+                + (census.stashedTabs > 0 ? ", \(census.stashedTabs) tab\(census.stashedTabs == 1 ? "" : "s") in inactive profiles" : "")
+                + ".")
+        }
+        lines.append("CPU is % of one core over a \(Int(Self.sampleInterval))s interval; thread CPU is the kernel's recent-usage estimate. Thread ids match the Thread_<id> labels in `sample` and Instruments.")
         lines.append("")
 
         func metric(_ name: String, _ cpu: Double, _ memory: UInt64?, indent: Int = 0) -> String {
             let pad = String(repeating: "  ", count: indent)
-            let mem = memory.map { Int64($0).formatted(.byteCount(style: .memory)) } ?? "-"
-            return pad + name.padding(toLength: max(44 - pad.count, name.count), withPad: " ", startingAt: 0)
+            let mem = memory.map { Self.formatBytes($0) } ?? "-"
+            return pad + name.padding(toLength: max(52 - pad.count, name.count), withPad: " ", startingAt: 0)
                 + String(format: "%7.1f%%  ", cpu) + mem
         }
 
         if let app {
             lines.append(metric("Wave (terminal, rendering, UI)", app.cpuPercent, app.memoryBytes))
-            for thread in app.threads where thread.cpuPercent > 0 {
-                lines.append(metric(thread.name, thread.cpuPercent, nil, indent: 1))
+            let shown = app.threads.filter { $0.cpuPercent > 0 }
+            for thread in shown {
+                lines.append(metric(Self.threadLabel(thread), thread.cpuPercent, nil, indent: 1))
+            }
+            let idle = app.threadCount - shown.count
+            if idle > 0 {
+                lines.append("  \(idle) more thread\(idle == 1 ? "" : "s") idle")
+            }
+            if let memory = app.memory {
+                var parts = ["anonymous \(Self.formatBytes(memory.anonymous))"]
+                if memory.compressed > 0 { parts.append("compressed \(Self.formatBytes(memory.compressed))") }
+                if memory.graphics > 0 { parts.append("graphics \(Self.formatBytes(memory.graphics))") }
+                parts.append("peak \(Self.formatBytes(memory.peakFootprint))")
+                lines.append("  memory: " + parts.joined(separator: ", "))
             }
             lines.append("")
         }
@@ -318,7 +483,8 @@ final class ActivityMonitor {
             guard !groups.isEmpty else { return }
             lines.append(header)
             for group in groups {
-                let title = group.subtitle.map { "\(group.title) (\($0))" } ?? group.title
+                var title = group.subtitle.map { "\(group.title) (\($0))" } ?? group.title
+                if group.isSelected { title = "▶ " + title }
                 lines.append(metric(title, group.cpuPercent, group.memoryBytes))
                 for process in group.processes {
                     lines.append(metric("\(process.name) [pid \(process.id)]", process.cpuPercent, process.memoryBytes, indent: 1))
@@ -326,9 +492,41 @@ final class ActivityMonitor {
             }
             lines.append("")
         }
-        append(tabs, header: "Tabs:")
+        append(tabs, header: "Tabs (▶ = shown on screen; only these render):")
         append(other, header: "Other:")
 
+        lines.append("Reading this:")
+        lines.append("- Each terminal surface owns a `renderer`, `io`, `io-reader` and `cf_release` thread; the row order above is by CPU, so a busy `renderer` is the on-screen tab redrawing. A `renderer` above a few % while all tabs are idle means something keeps invalidating that surface.")
+        lines.append("- `Main thread` is AppKit and SwiftUI: sidebar, tab bar, this panel. Threads named com.wave.* are Wave's own background queues.")
+        lines.append("- Wave's memory is mostly scrollback and glyph atlases; `graphics` is Metal textures. Compare `peak` with the current footprint to tell a leak from a spike.")
+        lines.append("- To see what a hot thread is doing: `sample wave 3 -file /tmp/wave.sample.txt`, then look for Thread_<id> in the call graph.")
+
         return lines.joined(separator: "\n")
+    }
+
+    /// "renderer [tid 1624989]", "Main thread", or "Thread [tid N]" when the
+    /// thread neither set a name nor was on a dispatch queue.
+    static func threadLabel(_ thread: ProcessActivity.ThreadReading) -> String {
+        let base: String
+        switch thread.name {
+        case "com.apple.main-thread": base = "Main thread"
+        case "": base = "Thread"
+        default: base = thread.name
+        }
+        return "\(base) [tid \(thread.id)]"
+    }
+
+    static func formatBytes(_ bytes: UInt64) -> String {
+        Int64(bytes).formatted(.byteCount(style: .memory))
+    }
+
+    static func formatDuration(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds)
+        let days = total / 86_400
+        let hours = total % 86_400 / 3_600
+        let minutes = total % 3_600 / 60
+        if days > 0 { return "\(days)d \(hours)h" }
+        if hours > 0 { return "\(hours)h \(minutes)m" }
+        return "\(minutes)m"
     }
 }

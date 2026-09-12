@@ -4,7 +4,7 @@ import GhosttyKit
 class GhosttyRuntime {
     private(set) var app: ghostty_app_t?
     private var config: ghostty_config_t?
-    private var tickPending = false
+    private var wakeup: CoalescedAction?
 
     var onAction: ((_ target: ghostty_target_s, _ action: ghostty_action_s) -> Bool)?
 
@@ -28,6 +28,8 @@ class GhosttyRuntime {
 
         ghostty_config_finalize(cfg)
 
+        wakeup = CoalescedAction { [weak self] in self?.tick() }
+
         var rt = ghostty_runtime_config_s()
         rt.userdata = Unmanaged.passUnretained(self).toOpaque()
         rt.supports_selection_clipboard = true
@@ -35,15 +37,9 @@ class GhosttyRuntime {
         rt.wakeup_cb = { ud in
             guard let ud else { return }
             let runtime = Unmanaged<GhosttyRuntime>.fromOpaque(ud).takeUnretainedValue()
-            // Coalesce rapid wakeups into a single tick per runloop cycle
-            DispatchQueue.main.async {
-                guard !runtime.tickPending else { return }
-                runtime.tickPending = true
-                DispatchQueue.main.async {
-                    runtime.tickPending = false
-                    runtime.tick()
-                }
-            }
+            // Coalesce before dispatching so a burst of output cannot flood
+            // the main queue with blocks that only check a pending flag.
+            runtime.wakeup?.schedule()
         }
 
         rt.action_cb = { appPtr, target, action in

@@ -1,0 +1,438 @@
+{
+  "baseline_commit": "06e70765f0a53686db3a84b3a6a7c1ec99048970",
+  "machine": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "cpu": "Apple M4 Pro",
+  "swift": "Apple Swift version 6.3 (swiftlang-6.3.0.123.5 clang-2100.0.123.102)\nTarget: arm64-apple-macosx26.0",
+  "source_sha256": {
+    "tgip/Terminal/TerminalSurfaceView.swift": "c18784b5692945b04698ebd41c1289de7a6b8bf52d23cf1ce72d3b5f0edfff8b",
+    "tgip/Terminal/CoalescedAction.swift": "ed84961300399177615fae2a4b5597c6e2cbe2a8ba0b0eb27c590a5fdae89605",
+    "tgip/Terminal/DirectoryGroupResolver.swift": "a0e4bd23c4b2de818f554f4587318e90c609e35f9add3730921d3052ffeab277"
+  },
+  "wakeups": {
+    "after_enqueued_blocks": 1,
+    "after_median_ms": 0.453167,
+    "after_ms": [
+      0.585041,
+      0.583375,
+      0.503125,
+      0.497459,
+      0.459708,
+      0.453167,
+      0.444458,
+      0.442708,
+      0.454333,
+      0.4085,
+      0.4855,
+      0.447209,
+      0.429084,
+      0.402541,
+      0.448709
+    ],
+    "before_enqueued_blocks": 50001,
+    "before_median_ms": 6.396166,
+    "before_ms": [
+      9.060167,
+      7.729875,
+      7.53675,
+      7.191458,
+      6.659542,
+      6.605791,
+      6.299166,
+      6.28075,
+      6.546583,
+      6.3735,
+      6.295708,
+      6.307667,
+      6.211125,
+      6.396166,
+      6.154792
+    ],
+    "samples": 15,
+    "wakeups": 50000
+  },
+  "grouping": [
+    {
+      "after_median_ms": 0.274875,
+      "after_ms": [
+        0.345083,
+        0.346208,
+        0.31525,
+        0.310208,
+        0.280125,
+        0.274875,
+        0.261833,
+        0.275542,
+        0.279292,
+        0.266958,
+        0.254041,
+        0.274833,
+        0.270042,
+        0.267667,
+        0.261833
+      ],
+      "before_median_ms": 8.275708,
+      "before_ms": [
+        10.8265,
+        9.989084,
+        9.596916,
+        8.909875,
+        8.619583,
+        8.033667,
+        8.202625,
+        8.328,
+        8.275708,
+        8.091375,
+        8.065667,
+        8.291417,
+        8.218875,
+        8.112417,
+        8.096833
+      ],
+      "pins": 12,
+      "tabs": 60
+    },
+    {
+      "after_median_ms": 0.000833,
+      "after_ms": [
+        0.000916,
+        0.000833,
+        0.000875,
+        0.000833,
+        0.000834,
+        0.000792,
+        0.000834,
+        0.000792,
+        0.000833,
+        0.00075,
+        0.000833,
+        0.000792,
+        0.000833,
+        0.00075,
+        0.000792
+      ],
+      "before_median_ms": 0.629833,
+      "before_ms": [
+        0.625708,
+        0.631916,
+        0.629833,
+        0.624208,
+        0.630458,
+        0.628667,
+        0.637375,
+        0.622833,
+        0.627792,
+        0.650875,
+        0.654583,
+        0.630417,
+        0.641667,
+        0.628625,
+        0.622375
+      ],
+      "pins": 0,
+      "tabs": 60
+    }
+  ],
+  "rendering": {
+    "seconds_per_scenario": 4.0,
+    "runs": {
+      "before": [
+        {
+          "checks": [
+            "initial_output",
+            "output_after_reattach",
+            "output_after_resize"
+          ],
+          "ghostty_version": "1.3.2-main-+7b47213f9",
+          "samples": [
+            {
+              "cpu_percent": 3.536827501950912,
+              "input_bytes": 0,
+              "scenario": "visible_idle",
+              "seconds": 4.000534375
+            },
+            {
+              "cpu_percent": 8.908724107415166,
+              "input_bytes": 92160,
+              "scenario": "visible_output",
+              "seconds": 4.00018
+            },
+            {
+              "cpu_percent": 7.413949645998184,
+              "input_bytes": 92160,
+              "scenario": "hidden_output",
+              "seconds": 4.000310417
+            }
+          ]
+        },
+        {
+          "checks": [
+            "initial_output",
+            "output_after_reattach",
+            "output_after_resize"
+          ],
+          "ghostty_version": "1.3.2-main-+7b47213f9",
+          "samples": [
+            {
+              "cpu_percent": 4.231250341852734,
+              "input_bytes": 0,
+              "scenario": "visible_idle",
+              "seconds": 4.000425083
+            },
+            {
+              "cpu_percent": 9.992573180122708,
+              "input_bytes": 92160,
+              "scenario": "visible_output",
+              "seconds": 4.000591167
+            },
+            {
+              "cpu_percent": 8.986101888951413,
+              "input_bytes": 92928,
+              "scenario": "hidden_output",
+              "seconds": 4.000444291
+            }
+          ]
+        },
+        {
+          "checks": [
+            "initial_output",
+            "output_after_reattach",
+            "output_after_resize"
+          ],
+          "ghostty_version": "1.3.2-main-+7b47213f9",
+          "samples": [
+            {
+              "cpu_percent": 3.7698277126638557,
+              "input_bytes": 0,
+              "scenario": "visible_idle",
+              "seconds": 4.000209333
+            },
+            {
+              "cpu_percent": 11.236909375171567,
+              "input_bytes": 92160,
+              "scenario": "visible_output",
+              "seconds": 4.000334834
+            },
+            {
+              "cpu_percent": 8.294111264717829,
+              "input_bytes": 92928,
+              "scenario": "hidden_output",
+              "seconds": 4.000440667
+            }
+          ]
+        },
+        {
+          "checks": [
+            "initial_output",
+            "output_after_reattach",
+            "output_after_resize"
+          ],
+          "ghostty_version": "1.3.2-main-+7b47213f9",
+          "samples": [
+            {
+              "cpu_percent": 3.9937388673872873,
+              "input_bytes": 0,
+              "scenario": "visible_idle",
+              "seconds": 4.000261542
+            },
+            {
+              "cpu_percent": 9.277905848239502,
+              "input_bytes": 91392,
+              "scenario": "visible_output",
+              "seconds": 4.000450167
+            },
+            {
+              "cpu_percent": 8.406613203386463,
+              "input_bytes": 92160,
+              "scenario": "hidden_output",
+              "seconds": 4.0008145
+            }
+          ]
+        },
+        {
+          "checks": [
+            "initial_output",
+            "output_after_reattach",
+            "output_after_resize"
+          ],
+          "ghostty_version": "1.3.2-main-+7b47213f9",
+          "samples": [
+            {
+              "cpu_percent": 3.888675264397435,
+              "input_bytes": 0,
+              "scenario": "visible_idle",
+              "seconds": 4.000514042
+            },
+            {
+              "cpu_percent": 9.829393800422661,
+              "input_bytes": 91392,
+              "scenario": "visible_output",
+              "seconds": 4.000399292
+            },
+            {
+              "cpu_percent": 9.28838166845574,
+              "input_bytes": 92160,
+              "scenario": "hidden_output",
+              "seconds": 4.00091225
+            }
+          ]
+        }
+      ],
+      "after": [
+        {
+          "checks": [
+            "initial_output",
+            "output_after_reattach",
+            "output_after_resize"
+          ],
+          "ghostty_version": "1.3.2-main-+7b47213f9",
+          "samples": [
+            {
+              "cpu_percent": 0.9117500524051936,
+              "input_bytes": 0,
+              "scenario": "visible_idle",
+              "seconds": 4.000548166
+            },
+            {
+              "cpu_percent": 8.655349175271699,
+              "input_bytes": 92160,
+              "scenario": "visible_output",
+              "seconds": 4.000439416
+            },
+            {
+              "cpu_percent": 3.3488412901642737,
+              "input_bytes": 92928,
+              "scenario": "hidden_output",
+              "seconds": 4.000249292
+            }
+          ]
+        },
+        {
+          "checks": [
+            "initial_output",
+            "output_after_reattach",
+            "output_after_resize"
+          ],
+          "ghostty_version": "1.3.2-main-+7b47213f9",
+          "samples": [
+            {
+              "cpu_percent": 1.0434102416353002,
+              "input_bytes": 0,
+              "scenario": "visible_idle",
+              "seconds": 4.000152417
+            },
+            {
+              "cpu_percent": 8.59898174393412,
+              "input_bytes": 92160,
+              "scenario": "visible_output",
+              "seconds": 4.000369
+            },
+            {
+              "cpu_percent": 3.686742157750085,
+              "input_bytes": 92160,
+              "scenario": "hidden_output",
+              "seconds": 4.000306875
+            }
+          ]
+        },
+        {
+          "checks": [
+            "initial_output",
+            "output_after_reattach",
+            "output_after_resize"
+          ],
+          "ghostty_version": "1.3.2-main-+7b47213f9",
+          "samples": [
+            {
+              "cpu_percent": 1.065700358353775,
+              "input_bytes": 0,
+              "scenario": "visible_idle",
+              "seconds": 4.0006555
+            },
+            {
+              "cpu_percent": 9.743200567737329,
+              "input_bytes": 92160,
+              "scenario": "visible_output",
+              "seconds": 4.000995333
+            },
+            {
+              "cpu_percent": 3.5235192305000966,
+              "input_bytes": 92160,
+              "scenario": "hidden_output",
+              "seconds": 4.000176834
+            }
+          ]
+        },
+        {
+          "checks": [
+            "initial_output",
+            "output_after_reattach",
+            "output_after_resize"
+          ],
+          "ghostty_version": "1.3.2-main-+7b47213f9",
+          "samples": [
+            {
+              "cpu_percent": 1.5585566213952209,
+              "input_bytes": 0,
+              "scenario": "visible_idle",
+              "seconds": 4.001202083
+            },
+            {
+              "cpu_percent": 7.519373952348955,
+              "input_bytes": 92160,
+              "scenario": "visible_output",
+              "seconds": 4.000200042
+            },
+            {
+              "cpu_percent": 3.7540090446579244,
+              "input_bytes": 92160,
+              "scenario": "hidden_output",
+              "seconds": 4.000603041
+            }
+          ]
+        },
+        {
+          "checks": [
+            "initial_output",
+            "output_after_reattach",
+            "output_after_resize"
+          ],
+          "ghostty_version": "1.3.2-main-+7b47213f9",
+          "samples": [
+            {
+              "cpu_percent": 1.1452117250421914,
+              "input_bytes": 0,
+              "scenario": "visible_idle",
+              "seconds": 4.001094208
+            },
+            {
+              "cpu_percent": 8.51308633155656,
+              "input_bytes": 92160,
+              "scenario": "visible_output",
+              "seconds": 4.0006055
+            },
+            {
+              "cpu_percent": 3.926934542565104,
+              "input_bytes": 92928,
+              "scenario": "hidden_output",
+              "seconds": 4.000499583
+            }
+          ]
+        }
+      ]
+    },
+    "summary": {
+      "visible_idle": {
+        "before_median_cpu_percent": 3.888675264397435,
+        "after_median_cpu_percent": 1.065700358353775
+      },
+      "visible_output": {
+        "before_median_cpu_percent": 9.829393800422661,
+        "after_median_cpu_percent": 8.59898174393412
+      },
+      "hidden_output": {
+        "before_median_cpu_percent": 8.406613203386463,
+        "after_median_cpu_percent": 3.686742157750085
+      }
+    }
+  }
+}

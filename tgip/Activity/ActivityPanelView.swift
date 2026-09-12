@@ -31,7 +31,7 @@ struct ActivityPanelView: View {
                     }
                     Section {
                     } footer: {
-                        Text("Sampled every \(Int(ActivityMonitor.sampleInterval)) seconds. CPU is % of one core, so a busy group can exceed 100%. High Wave CPU while a tab streams output is rendering cost — the work originates in the tab.")
+                        Text("Sampled every \(Int(ActivityMonitor.sampleInterval)) seconds. CPU is % of one core, so a busy group can exceed 100%. Only the tab shown in each window (▶) renders; its `renderer` thread is the redraw cost of whatever that tab prints. Copy Report adds the build, machine, and memory facts a reader needs to interpret these numbers.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -73,19 +73,34 @@ struct ActivityPanelView: View {
 
     @ViewBuilder
     private func appRows(_ app: ActivityMonitor.AppSample) -> some View {
+        let census = monitor.census
         DisclosureGroup {
             ForEach(app.threads) { thread in
                 MetricLine(
-                    name: thread.name,
+                    name: ActivityMonitor.threadLabel(thread),
                     detail: nil,
                     cpu: thread.cpuPercent,
                     memory: nil
                 )
             }
+            let idle = app.threadCount - app.threads.count
+            if idle > 0 {
+                Text("\(idle) more thread\(idle == 1 ? "" : "s") near idle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let memory = app.memory {
+                Text("Memory: anonymous \(ActivityMonitor.formatBytes(memory.anonymous))"
+                    + (memory.graphics > 0 ? ", graphics \(ActivityMonitor.formatBytes(memory.graphics))" : "")
+                    + (memory.compressed > 0 ? ", compressed \(ActivityMonitor.formatBytes(memory.compressed))" : "")
+                    + ", peak \(ActivityMonitor.formatBytes(memory.peakFootprint))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         } label: {
             MetricLine(
                 name: "Wave (terminal, rendering, UI)",
-                detail: nil,
+                detail: "\(census.surfaces) surface\(census.surfaces == 1 ? "" : "s"), \(census.visibleSurfaces) rendering",
                 cpu: app.cpuPercent,
                 memory: app.memoryBytes,
                 prominent: true
@@ -109,7 +124,7 @@ private struct GroupRow: View {
             }
         } label: {
             MetricLine(
-                name: group.title,
+                name: group.isSelected ? "▶ " + group.title : group.title,
                 detail: group.subtitle,
                 cpu: group.cpuPercent,
                 memory: group.memoryBytes,

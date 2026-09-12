@@ -138,8 +138,8 @@ final class TerminalManager {
         groupMeta[path] = m
     }
 
-    func groupAnchor(for cwd: String, pinned: [String]) -> String {
-        runtime.groupAnchor(for: cwd, pinned: pinned)
+    func groupAnchorResolver(pinned: [String]) -> (String) -> String {
+        runtime.groupAnchorResolver(pinned: pinned)
     }
 
     func gitRepositoryInfo(for path: String) -> GitRepositoryInfo? {

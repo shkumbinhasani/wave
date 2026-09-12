@@ -8,7 +8,6 @@ class TerminalSurfaceView: NSView {
     private weak var runtime: GhosttyRuntime?
 
     private var trackingArea: NSTrackingArea?
-    private var displayLink: CVDisplayLink?
     private var windowObservers: [NSObjectProtocol] = []
     private var markedText = NSMutableAttributedString()
 
@@ -17,9 +16,9 @@ class TerminalSurfaceView: NSView {
     private var keyTextAccumulator: [String]?
 
     /// Whether this tab is the currently selected (visible) tab.
-    /// When false, the CVDisplayLink is paused to save CPU.
+    /// Ghostty owns frame scheduling; hidden tabs pause its renderer.
     var isActiveTab: Bool = false {
-        didSet { if oldValue != isActiveTab { updateDisplayLinkRunning() } }
+        didSet { if oldValue != isActiveTab { updateRendererVisibility() } }
     }
 
     var initialWorkingDirectory: String?
@@ -51,24 +50,24 @@ class TerminalSurfaceView: NSView {
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         super.viewWillMove(toWindow: newWindow)
-        // Stop the display link before we leave the window so its callback
-        // thread can't race surface teardown.
-        if newWindow == nil { stopDisplayLink() }
+        if newWindow == nil {
+            surface.map { ghostty_surface_set_occlusion($0, false) }
+            removeWindowObservers()
+        }
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        guard let window else { stopDisplayLink(); return }
+        guard let window else { removeWindowObservers(); return }
         if surface == nil { runtime?.createSurface(for: self) }
         let s = window.backingScaleFactor
         surface.map { ghostty_surface_set_content_scale($0, Double(s), Double(s)) }
-        setupDisplayLink()
         // Re-bind window observers to the *current* window — a view can move
         // between windows, and observers registered against the old window
         // would otherwise be stale.
         observeWindowVisibility()
-        updateDisplayLinkRunning()
         updateDisplayID()
+        updateRendererVisibility()
         refreshTrackingArea()
     }
 
@@ -111,28 +110,13 @@ class TerminalSurfaceView: NSView {
     }
 
     func destroySurface() {
-        stopDisplayLink()
+        removeWindowObservers()
         if let surface { ghostty_surface_free(surface); self.surface = nil }
     }
 
     deinit { destroySurface() }
 
-    // MARK: - Display Link
-
-    private func setupDisplayLink() {
-        guard displayLink == nil else { return }
-        var link: CVDisplayLink?
-        CVDisplayLinkCreateWithActiveCGDisplays(&link)
-        guard let link else { return }
-        let ud = Unmanaged.passUnretained(self).toOpaque()
-        CVDisplayLinkSetOutputCallback(link, { _, _, _, _, _, ud -> CVReturn in
-            guard let ud else { return kCVReturnSuccess }
-            Unmanaged<TerminalSurfaceView>.fromOpaque(ud).takeUnretainedValue()
-                .surface.map { ghostty_surface_refresh($0) }
-            return kCVReturnSuccess
-        }, ud)
-        self.displayLink = link
-    }
+    // MARK: - Renderer visibility
 
     private func updateDisplayID() {
         guard let surface else { return }
@@ -146,21 +130,20 @@ class TerminalSurfaceView: NSView {
     /// Idempotent — clears any observers bound to a previous window first.
     private func observeWindowVisibility() {
         let nc = NotificationCenter.default
-        for observer in windowObservers { nc.removeObserver(observer) }
-        windowObservers.removeAll()
+        removeWindowObservers()
         guard window != nil else { return }
         windowObservers.append(nc.addObserver(
             forName: NSWindow.didChangeOcclusionStateNotification,
             object: window, queue: .main
-        ) { [weak self] _ in self?.updateDisplayLinkRunning() })
+        ) { [weak self] _ in self?.updateRendererVisibility() })
         windowObservers.append(nc.addObserver(
             forName: NSWindow.didMiniaturizeNotification,
             object: window, queue: .main
-        ) { [weak self] _ in self?.updateDisplayLinkRunning() })
+        ) { [weak self] _ in self?.updateRendererVisibility() })
         windowObservers.append(nc.addObserver(
             forName: NSWindow.didDeminiaturizeNotification,
             object: window, queue: .main
-        ) { [weak self] _ in self?.updateDisplayLinkRunning() })
+        ) { [weak self] _ in self?.updateRendererVisibility() })
         windowObservers.append(nc.addObserver(
             forName: NSWindow.didChangeScreenNotification,
             object: window, queue: .main
@@ -183,22 +166,16 @@ class TerminalSurfaceView: NSView {
         }
     }
 
-    private func updateDisplayLinkRunning() {
-        guard let displayLink else { return }
-        let windowVisible = window?.occlusionState.contains(.visible) ?? false
-        let shouldRun = isActiveTab && windowVisible
-        if shouldRun && !CVDisplayLinkIsRunning(displayLink) {
-            CVDisplayLinkStart(displayLink)
-        } else if !shouldRun && CVDisplayLinkIsRunning(displayLink) {
-            CVDisplayLinkStop(displayLink)
-        }
+    private func updateRendererVisibility() {
+        guard let surface else { return }
+        let windowVisible = (window?.occlusionState.contains(.visible) ?? false)
+            && window?.isMiniaturized == false
+        ghostty_surface_set_occlusion(surface, isActiveTab && windowVisible)
     }
 
-    private func stopDisplayLink() {
+    private func removeWindowObservers() {
         for observer in windowObservers { NotificationCenter.default.removeObserver(observer) }
         windowObservers.removeAll()
-        displayLink.map { CVDisplayLinkStop($0) }
-        displayLink = nil
     }
 
     // MARK: - Focus
