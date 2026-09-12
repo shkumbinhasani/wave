@@ -12,10 +12,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # The window chrome uses Liquid Glass, which needs the macOS 26 SDK.
+      # The image's default Xcode is 16.4; pick the newest 26.x it ships.
+      - name: Select Xcode 26
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
       - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: 0.15.2
+          version: 0.16.0
 
       - name: Install XcodeGen
         run: brew install xcodegen
