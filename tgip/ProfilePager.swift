@@ -149,6 +149,10 @@ final class PagerScrollView: NSScrollView {
             pages = (0..<pageCount).map { index in
                 let host = NSHostingView(rootView: makePage(index))
                 host.translatesAutoresizingMaskIntoConstraints = true
+                // The window's title bar (taller with the shape toolbar) would
+                // otherwise inset the page from the top; the sidebar lays out
+                // its own header.
+                host.safeAreaRegions = []
                 content.addSubview(host)
                 return host
             }

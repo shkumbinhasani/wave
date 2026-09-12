@@ -11,30 +11,19 @@ struct ContentView: View {
     private let minSidebarWidth: CGFloat = 180
     private let maxSidebarWidth: CGFloat = 400
     private let outerPadding: CGFloat = 10
-    private var innerCornerRadius: CGFloat { WindowConfigurator.windowCornerRadius - outerPadding }
+    /// Concentric with the window: its radius minus the pane's distance to the
+    /// edge. Full screen has square corners, so panes fall back to a soft 10.
+    private var innerCornerRadius: CGFloat {
+        let window = manager.windowCornerRadius
+        return window > outerPadding ? window - outerPadding : 10
+    }
 
     var body: some View {
         @Bindable var manager = manager
         return ZStack {
-            ZStack {
-                // Glass layer — always present, controlled by blur slider
-                WindowBackdrop()
-                    .opacity(theme.vibrancy)
-
-                // Solid accent fill on top — tint slider controls how much it covers the blur
-                theme.accentColor
-                    .opacity(theme.backgroundOpacity)
-
-                // Brightness overlay
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(theme.brightness * 0.2),
-                        Color.white.opacity(theme.brightness * 0.06)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-            }
+            // Glass tinted by the accent — the system picks blur and text
+            // contrast for the appearance the theme asks for.
+            WindowBackdrop(accent: theme.accentColor, tint: theme.tint, cornerRadius: manager.windowCornerRadius)
 
             ZStack(alignment: .leading) {
                 // Terminal or diff inspector fills the main pane
@@ -57,7 +46,6 @@ struct ContentView: View {
                 if manager.sidebarPinned || sidebarHoverVisible {
                     DraggableContainer {
                         Sidebar(
-                            lightText: theme.lightText,
                             topInset: 46,
                             sidebarPinned: $manager.sidebarPinned,
                             onOpenGitDiff: { groupPath in
@@ -68,20 +56,8 @@ struct ContentView: View {
                     .frame(width: sidebarWidth)
                     .background {
                             if !manager.sidebarPinned {
-                                ZStack {
-                                    PanelBackdrop(cornerRadius: 12)
-                                    theme.accentColor.opacity(theme.backgroundOpacity)
-                                    LinearGradient(
-                                        colors: [
-                                            Color.white.opacity(theme.brightness * 0.2),
-                                            Color.white.opacity(theme.brightness * 0.06)
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    )
-                                }
-                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                                .shadow(color: .black.opacity(0.3), radius: 15, x: 5)
+                                PanelBackdrop(cornerRadius: 12, accent: theme.accentColor, tint: theme.tint)
+                                    .shadow(color: .black.opacity(0.3), radius: 15, x: 5)
                             }
                         }
                         .transition(.move(edge: .leading))
@@ -287,37 +263,26 @@ func buildGroups(
 
 struct Sidebar: View {
     @Environment(TerminalManager.self) var manager
-    // Text mode is threaded in from ContentView (the main tree) rather than read
-    // from the theme here. The whole sidebar lives in DraggableContainer's detached
-    // NSHostingView, which re-runs view bodies on a theme change but only repaints
-    // structural/input changes — a self-observed color change left tab text stale
-    // until a hover. Passing lightText as an input makes the recolor a structural
-    // change the host paints, with no full-subtree recreation. See foreground().
-    let lightText: Bool
     @State private var showThemeEditor = false
     var topInset: CGFloat = 0
     @Binding var sidebarPinned: Bool
     var onOpenGitDiff: (String) -> Void
 
     init(
-        lightText: Bool,
         topInset: CGFloat = 0,
         sidebarPinned: Binding<Bool> = .constant(true),
         onOpenGitDiff: @escaping (String) -> Void = { _ in }
     ) {
-        self.lightText = lightText
         self.topInset = topInset
         self._sidebarPinned = sidebarPinned
         self.onOpenGitDiff = onOpenGitDiff
     }
 
-    private func foreground(_ opacity: Double) -> Color {
-        SidebarTheme.adaptiveForeground(lightText: lightText, opacity: opacity)
-    }
-
     var body: some View {
         VStack(spacing: 0) {
-            // Window controls row
+            // Window controls row. The sidebar draws its own close/minimize/zoom
+            // because in drawer mode the pane fills the window and the system
+            // buttons would sit on top of the terminal.
             HStack(spacing: 8) {
                 SidebarWindowControls()
 
@@ -328,7 +293,7 @@ struct Sidebar: View {
                 } label: {
                     Image(systemName: "sidebar.left")
                         .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(foreground(sidebarPinned ? 0.5 : 0.35))
+                        .foregroundStyle(sidebarPinned ? .secondary : .tertiary)
                 }
                 .buttonStyle(.plain)
                 .help(sidebarPinned ? "Hide Sidebar" : "Pin Sidebar")
@@ -363,19 +328,19 @@ struct Sidebar: View {
             HStack(spacing: 0) {
                 Text("\(manager.sessions.count)")
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(foreground(0.3))
+                    .foregroundStyle(.tertiary)
                     .frame(width: 30, alignment: .center)
 
                 Spacer()
 
-                ProfileBar(lightText: lightText)
+                ProfileBar()
 
                 Spacer()
 
                 Button(action: { manager.createSession() }) {
                     Image(systemName: "plus")
                         .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(foreground(0.5))
+                        .foregroundStyle(.secondary)
                         .frame(width: 30, height: 30)
                 }
                 .buttonStyle(.plain)
@@ -418,7 +383,6 @@ struct Sidebar: View {
                     if isActive {
                         let isFocused = manager.focusedGroupIndex == groupIndex
                         DirectoryGroup(
-                            lightText: lightText,
                             directory: labels[group.fullPath] ?? group.fullPath,
                             fullPath: group.fullPath,
                             sessions: group.sessions,
@@ -433,8 +397,7 @@ struct Sidebar: View {
                             sessions: group.sessions,
                             meta: meta,
                             label: meta.displayName ?? (labels[group.fullPath] ?? group.fullPath),
-                            gitStatus: manager.gitStatusForProfile(at: index, groupPath: group.fullPath),
-                            lightText: profile.lightText
+                            gitStatus: manager.gitStatusForProfile(at: index, groupPath: group.fullPath)
                         )
                     }
 
@@ -492,25 +455,18 @@ struct InactiveGroupRow: View {
     let meta: GroupMeta
     let label: String
     var gitStatus: GitRepoStatus?
-    /// This profile's text mode — so the page renders in its own colors while
-    /// swiping, rather than borrowing the live (active) profile's colors.
-    var lightText: Bool = true
-
-    private func foreground(_ opacity: Double) -> Color {
-        SidebarTheme.adaptiveForeground(lightText: lightText, opacity: opacity)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 8) {
-                GroupIcon(meta: meta, opacity: 0.4, lightText: lightText)
+                GroupIcon(meta: meta, opacity: 0.4)
                 Text(label)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(foreground(0.45))
+                    .foregroundStyle(.tertiary)
                     .lineLimit(1)
                 Spacer()
                 if let gitStatus {
-                    RepoDirtyBadge(lightText: lightText, status: gitStatus, isFocused: false)
+                    RepoDirtyBadge(status: gitStatus, isFocused: false)
                         .opacity(0.6)
                 }
             }
@@ -524,7 +480,7 @@ struct InactiveGroupRow: View {
                         .frame(width: 6, height: 6)
                     Text(session.title)
                         .font(.system(size: 14))
-                        .foregroundStyle(foreground(0.4))
+                        .foregroundStyle(.tertiary)
                         .lineLimit(1)
                     Spacer()
                 }
@@ -540,10 +496,7 @@ struct InactiveGroupRow: View {
 
 struct DirectoryGroup: View {
     @Environment(TerminalManager.self) var manager
-    let lightText: Bool
-    private func foreground(_ opacity: Double) -> Color {
-        SidebarTheme.adaptiveForeground(lightText: lightText, opacity: opacity)
-    }
+    @Environment(SidebarTheme.self) private var theme
     let directory: String
     let fullPath: String
     let sessions: [TerminalSession]
@@ -567,11 +520,11 @@ struct DirectoryGroup: View {
         VStack(alignment: .leading, spacing: 3) {
             // Group header
             HStack(spacing: 8) {
-                GroupIcon(meta: meta, opacity: isFocused ? 0.85 : 0.55, lightText: lightText)
+                GroupIcon(meta: meta, opacity: isFocused ? 0.85 : 0.55)
 
                 Text(label)
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(foreground(isFocused ? 0.9 : 0.65))
+                    .foregroundStyle(Color.label(isFocused ? 0.9 : 0.65))
                     .lineLimit(1)
 
                 Spacer()
@@ -580,7 +533,7 @@ struct DirectoryGroup: View {
                     Button {
                         onOpenGitDiff(fullPath)
                     } label: {
-                        RepoDirtyBadge(lightText: lightText, status: gitStatus, isFocused: isFocused)
+                        RepoDirtyBadge(status: gitStatus, isFocused: isFocused)
                     }
                     .buttonStyle(.plain)
                     .help("Open uncommitted diff")
@@ -589,22 +542,19 @@ struct DirectoryGroup: View {
                 if groupIndex < 9 {
                     Text("\u{2318}\(groupIndex + 1)")
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(foreground(isFocused ? 0.55 : 0.3))
-                        .padding(.horizontal, 5)
+                        .foregroundStyle(Color.label(isFocused ? 0.55 : 0.3))
+                        .padding(.horizontal, 6)
                         .padding(.vertical, 2)
                         .background(
-                            RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(foreground(isFocused ? 0.12 : 0.04))
+                            Capsule(style: .continuous)
+                                .fill(Color.label(isFocused ? 0.12 : 0.04))
                         )
                 }
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isFocused ? foreground(0.08) : Color.clear)
-            )
-            .contentShape(Rectangle())
+            .contentShape(Capsule())
+            .selectionGlass(isFocused ? .hovered : .idle, accent: theme.accentColor)
             .onTapGesture {
                 if sessions.isEmpty {
                     manager.createSession(in: fullPath)
@@ -689,7 +639,6 @@ struct DirectoryGroup: View {
                             case .tab(let session):
                                 let originalIndex = sessions.firstIndex(where: { $0.id == session.id }) ?? 0
                                 TabRow(
-                                    lightText: lightText,
                                     session: session,
                                     directory: row.fullPath,
                                     isTabFocused: isFocused && focusedTabOffset == originalIndex,
@@ -713,7 +662,7 @@ struct DirectoryGroup: View {
         let indent = Self.treeIndent
         Canvas { ctx, size in
             let dash = StrokeStyle(lineWidth: 1, lineCap: .round)
-            let shading = GraphicsContext.Shading.color(foreground(0.28))
+            let shading = GraphicsContext.Shading.color(Color.label(0.28))
             let midY = size.height / 2
             let radius: CGFloat = 5
             func centerX(_ level: Int) -> CGFloat { CGFloat(level) * indent + indent / 2 }
@@ -754,7 +703,7 @@ struct DirectoryGroup: View {
                 .truncationMode(.head)
             Spacer(minLength: 0)
         }
-        .foregroundStyle(foreground(0.5))
+        .foregroundStyle(.secondary)
         .padding(.trailing, 8)
         .padding(.vertical, 4)
     }
@@ -769,10 +718,7 @@ enum DragState {
 
 struct TabRow: View {
     @Environment(TerminalManager.self) var manager
-    let lightText: Bool
-    private func foreground(_ opacity: Double) -> Color {
-        SidebarTheme.adaptiveForeground(lightText: lightText, opacity: opacity)
-    }
+    @Environment(SidebarTheme.self) private var theme
     var session: TerminalSession
     let directory: String
     var isTabFocused: Bool = false
@@ -799,6 +745,10 @@ struct TabRow: View {
                 .padding(.horizontal, 8)
                 .opacity(isDropTarget && !dropAtEnd ? 1 : 0)
 
+            Button {
+                manager.selectedSessionID = session.id
+                manager.focusedGroupIndex = nil
+            } label: {
             HStack(spacing: 8) {
                 if let agent = session.agentKind {
                     let glyphTint = session.agentStatus.isAttention
@@ -831,7 +781,7 @@ struct TabRow: View {
 
                 Text(session.title)
                     .font(.system(size: 13, weight: isSelected ? .medium : .regular))
-                    .foregroundStyle(foreground(isSelected ? 0.95 : 0.72))
+                    .foregroundStyle(Color.label(isSelected ? 0.95 : 0.72))
                     .lineLimit(1)
                     .truncationMode(.tail)
 
@@ -841,10 +791,10 @@ struct TabRow: View {
                     Button(action: { manager.closeSession(session) }) {
                         Image(systemName: "xmark")
                             .font(.system(size: 8, weight: .bold))
-                            .foregroundStyle(foreground(0.4))
+                            .foregroundStyle(.tertiary)
                             .frame(width: 16, height: 16)
                             .background(
-                                Circle().fill(foreground(hovering ? 0.12 : 0))
+                                Circle().fill(Color.label(hovering ? 0.12 : 0))
                             )
                     }
                     .buttonStyle(.plain)
@@ -853,15 +803,21 @@ struct TabRow: View {
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(
-                        session.needsAttention ? session.agentStatus.color.opacity(attentionPulse ? 0.16 : 0.06) :
-                        isSelected ? foreground(0.12) :
-                        (hovering || isTabFocused) ? foreground(0.06) :
-                        Color.clear
-                    )
+            .contentShape(Capsule())
+            .background {
+                // Attention pulse under the glass so the agent's status color
+                // shows through it.
+                if session.needsAttention {
+                    Capsule(style: .continuous)
+                        .fill(session.agentStatus.color.opacity(attentionPulse ? 0.16 : 0.06))
+                }
+            }
+            .selectionGlass(
+                isSelected ? .selected : (hovering || isTabFocused) ? .hovered : .idle,
+                accent: theme.accentColor
             )
+            }
+            .buttonStyle(.plain)
 
             // Drop indicator line below (last tab only)
             RoundedRectangle(cornerRadius: 1)
@@ -874,10 +830,6 @@ struct TabRow: View {
         .contentShape(Rectangle())
         .preventWindowDrag()
         .onHover { hovering = $0 }
-        .onTapGesture {
-            manager.selectedSessionID = session.id
-            manager.focusedGroupIndex = nil
-        }
         .contextMenu {
             Button("Move to New Window") {
                 AppRuntime.shared.tearOut(sessionID: session.id, at: nil)
@@ -1024,12 +976,8 @@ struct GroupDropDelegate: DropDelegate {
 struct GroupIcon: View {
     let meta: GroupMeta
     var opacity: Double = 0.55
-    /// Text mode threaded in so the icon recolors inside the detached host.
-    let lightText: Bool
 
-    private var iconColor: Color {
-        SidebarTheme.adaptiveForeground(lightText: lightText, opacity: opacity)
-    }
+    private var iconColor: Color { Color.label(opacity) }
 
     var body: some View {
         Group {
@@ -1053,10 +1001,7 @@ struct GroupIcon: View {
 
 struct ProfileBar: View {
     @Environment(TerminalManager.self) var manager
-    let lightText: Bool
-    private func foreground(_ opacity: Double) -> Color {
-        SidebarTheme.adaptiveForeground(lightText: lightText, opacity: opacity)
-    }
+    @Environment(SidebarTheme.self) private var theme
     @State private var hoveredIndex: Int?
 
     @State private var scrolledActiveID: UUID?
@@ -1064,6 +1009,7 @@ struct ProfileBar: View {
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
+            SidebarGlassContainer {
             HStack(spacing: 8) {
                 ForEach(Array(manager.profiles.enumerated()), id: \.element.id) { index, profile in
                     let isActive = index == manager.activeProfileIndex
@@ -1072,15 +1018,15 @@ struct ProfileBar: View {
                             // Same size for every profile — the active one is marked by a
                             // subtle pill behind it, not by scaling up (Arc-style).
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(foreground(
+                            .foregroundStyle(Color.label(
                                 isActive ? 0.95 : (hoveredIndex == index ? 0.6 : 0.4)
                             ))
                             .frame(width: 30, height: 26)
-                            .background(
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .fill(foreground(isActive ? 0.13 : (hoveredIndex == index ? 0.06 : 0)))
+                            .contentShape(Capsule())
+                            .selectionGlass(
+                                isActive ? .selected : hoveredIndex == index ? .hovered : .idle,
+                                accent: theme.accentColor
                             )
-                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .id(profile.id)
@@ -1169,8 +1115,9 @@ struct ProfileBar: View {
                         }
                     }
                 }
+                }
             }
-        }
+            }
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
             .frame(minWidth: barWidth)
@@ -1197,13 +1144,12 @@ struct ProfileBar: View {
 
 struct TerminalSurface: View {
     @Environment(TerminalManager.self) var manager
-    @Environment(SidebarTheme.self) private var theme
     let sessionID: UUID?
     var cornerRadius: CGFloat = 10
 
     var body: some View {
         TerminalView(sessionID: sessionID)
-            .paneChrome(fallbackRadius: cornerRadius, border: theme.adaptiveForeground(opacity: 0.14))
+            .paneChrome(cornerRadius: cornerRadius)
             .overlay(alignment: .topTrailing) {
                 if let sessionID,
                    let searchState = manager.searchState,
@@ -1233,12 +1179,12 @@ struct SidebarWindowControls: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            WindowDot(color: Color(red: 1.0, green: 0.37, blue: 0.33)) {
+            WindowDot(color: Color(nsColor: .systemRed)) {
                 performWindowAction { window in
                     if manager.confirmWindowClose() { window.close() }
                 }
             }
-            WindowDot(color: Color(red: 1.0, green: 0.74, blue: 0.18)) {
+            WindowDot(color: Color(nsColor: .systemYellow)) {
                 performWindowAction { window in
                     window.styleMask.insert(.miniaturizable)
 
@@ -1253,7 +1199,7 @@ struct SidebarWindowControls: View {
                     }
                 }
             }
-            WindowDot(color: Color(red: 0.16, green: 0.80, blue: 0.25)) {
+            WindowDot(color: Color(nsColor: .systemGreen)) {
                 performWindowAction { $0.toggleFullScreen(nil) }
             }
         }

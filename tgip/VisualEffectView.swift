@@ -83,12 +83,37 @@ struct WindowConfigurator: NSViewRepresentable {
         registerObservers(for: window, coordinator: coordinator)
     }
 
-    static let windowCornerRadius: CGFloat = 20
+    /// Used until a window is attached, and on systems that don't expose
+    /// the radius. macOS 26 windows measure 16.
+    static let fallbackWindowCornerRadius: CGFloat = 16
+
+    /// macOS 26 picks the window's corner radius from its chrome: a plain
+    /// titled window gets 16, a window with a unified toolbar gets the larger
+    /// 26 that Calculator, Finder and most Tahoe apps use. An empty toolbar
+    /// draws nothing (the title bar is transparent) and passes clicks through
+    /// to our content, so it only sets the shape. Idempotent.
+    static func installShapeToolbar(_ window: NSWindow) {
+        guard window.toolbar?.identifier != shapeToolbarIdentifier else { return }
+        let toolbar = NSToolbar(identifier: shapeToolbarIdentifier)
+        toolbar.showsBaselineSeparator = false
+        toolbar.allowsUserCustomization = false
+        window.toolbar = toolbar
+        window.toolbarStyle = .unified
+    }
+    private static let shapeToolbarIdentifier = NSToolbar.Identifier("wave.window-shape")
+
+    /// The radius AppKit is drawing the window with. Same private accessor
+    /// Ghostty's macOS app reads to shape its glass. nil when unavailable;
+    /// 0 while the window is full screen.
+    static func systemCornerRadius(of window: NSWindow) -> CGFloat? {
+        guard window.responds(to: Selector(("_cornerRadius"))) else { return nil }
+        return window.value(forKey: "_cornerRadius") as? CGFloat
+    }
 
     private func configureWindow(_ window: NSWindow) {
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
-        window.toolbar = nil
+        Self.installShapeToolbar(window)
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = true
@@ -106,15 +131,21 @@ struct WindowConfigurator: NSViewRepresentable {
             contentView.layer?.masksToBounds = true
         }
 
+        Self.hideTrafficLights(window)
+    }
+
+    /// The sidebar draws its own window controls: in drawer mode the pane
+    /// fills the window, so the system buttons would overlap the terminal.
+    /// They stay in the hierarchy (invisible, offscreen) so keyboard shortcuts
+    /// and the Window menu keep working.
+    private static func hideTrafficLights(_ window: NSWindow) {
         let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
         let nativeButtons = buttons.compactMap { window.standardWindowButton($0) }
-
         nativeButtons.forEach {
             $0.isHidden = false
             $0.alphaValue = 0.001
             $0.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
         }
-
         Set(nativeButtons.compactMap(\.superview)).forEach {
             $0.isHidden = false
             $0.alphaValue = 0.001
@@ -122,9 +153,10 @@ struct WindowConfigurator: NSViewRepresentable {
         }
     }
 
+    // AppKit re-lays the buttons out on resize, full screen, and key changes;
+    // hide them again after each.
     private func registerObservers(for window: NSWindow, coordinator: Coordinator) {
         guard coordinator.window !== window else { return }
-
         coordinator.removeObservers()
         coordinator.window = window
 
@@ -134,30 +166,12 @@ struct WindowConfigurator: NSViewRepresentable {
             NSWindow.didResizeNotification,
             NSWindow.didBecomeKeyNotification
         ]
-
         coordinator.observers = names.map { name in
             NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { _ in
-                reconfigure(window)
-            }
-        }
-    }
-
-    private func reconfigure(_ window: NSWindow) {
-        for delay in [0.0, 0.05, 0.2] {
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                let buttons: [NSWindow.ButtonType] = [.closeButton, .miniaturizeButton, .zoomButton]
-                let nativeButtons = buttons.compactMap { window.standardWindowButton($0) }
-
-                nativeButtons.forEach {
-                    $0.isHidden = false
-                    $0.alphaValue = 0.001
-                    $0.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
-                }
-
-                Set(nativeButtons.compactMap(\.superview)).forEach {
-                    $0.isHidden = false
-                    $0.alphaValue = 0.001
-                    $0.setFrameOrigin(NSPoint(x: -10_000, y: $0.frame.origin.y))
+                for delay in [0.0, 0.05, 0.2] {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        Self.hideTrafficLights(window)
+                    }
                 }
             }
         }

@@ -1,7 +1,6 @@
 import SwiftUI
 
 private struct SearchOverlayButton: View {
-    @Environment(SidebarTheme.self) private var theme
     let systemImage: String
     let isDisabled: Bool
     let action: () -> Void
@@ -11,11 +10,11 @@ private struct SearchOverlayButton: View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(theme.adaptiveForeground(opacity: isDisabled ? 0.22 : (hovering ? 0.85 : 0.65)))
+                .foregroundStyle(Color.label(isDisabled ? 0.22 : (hovering ? 0.85 : 0.65)))
                 .frame(width: 22, height: 22)
                 .background(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(theme.adaptiveForeground(opacity: hovering && !isDisabled ? 0.12 : 0.04))
+                        .fill(Color.label(hovering && !isDisabled ? 0.12 : 0.04))
                 )
         }
         .buttonStyle(.plain)
@@ -25,7 +24,6 @@ private struct SearchOverlayButton: View {
 }
 
 struct TerminalSearchOverlay: View {
-    @Environment(SidebarTheme.self) private var theme
     @Binding var query: String
     let totalMatches: Int?
     let selectedMatch: Int?
@@ -64,24 +62,24 @@ struct TerminalSearchOverlay: View {
         HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(theme.adaptiveForeground(opacity: 0.5))
+                .foregroundStyle(.secondary)
 
             TextField("Find in terminal", text: $query)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(theme.adaptiveForeground(opacity: 0.92))
+                .foregroundStyle(.primary)
                 .frame(width: 220)
                 .focused($searchFieldFocused)
                 .onSubmit(onNext)
 
             Text(statusText)
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundStyle(theme.adaptiveForeground(opacity: 0.48))
+                .foregroundStyle(.tertiary)
                 .frame(width: 112, alignment: .trailing)
                 .lineLimit(1)
 
             Rectangle()
-                .fill(theme.adaptiveForeground(opacity: 0.08))
+                .fill(Color.label(0.08))
                 .frame(width: 1, height: 16)
 
             SearchOverlayButton(systemImage: "chevron.up", isDisabled: !canNavigate, action: onPrevious)
@@ -91,16 +89,11 @@ struct TerminalSearchOverlay: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         .background {
-            ZStack {
-                VisualEffectView(material: .hudWindow, blendingMode: .withinWindow, emphasized: false)
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(theme.adaptiveScrim(opacity: theme.lightText ? 0.2 : 0.05))
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            PanelBackdrop(cornerRadius: 12)
         }
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(theme.adaptiveForeground(opacity: 0.14), lineWidth: 1)
+                .strokeBorder(.separator, lineWidth: 1)
         }
         .shadow(color: Color.black.opacity(0.22), radius: 18, y: 8)
         .preventWindowDrag()

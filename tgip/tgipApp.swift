@@ -55,6 +55,8 @@ struct WindowRoot: View {
         ContentView()
             .environment(manager)
             .environment(manager.theme)
+            // The theme's appearance drives every semantic color in the window.
+            .preferredColorScheme(manager.theme.appearance.colorScheme)
             .focusedSceneValue(\.terminalManager, manager)
             .background(WindowAccessor { window in
                 manager.window = window
@@ -233,7 +235,9 @@ struct TerminalCommands: Commands {
             .disabled(manager?.gitIntegrationEnabled != true)
         }
 
-        CommandGroup(after: .toolbar) {
+        // Replacing (not appending to) the toolbar group drops the Show/Hide
+        // Toolbar item AppKit adds for the shape-only toolbar.
+        CommandGroup(replacing: .toolbar) {
             ForEach(0..<9, id: \.self) { i in
                 Button("Focus Group \(i + 1)") {
                     manager?.focusGroup(at: i)

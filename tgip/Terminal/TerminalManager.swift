@@ -14,8 +14,64 @@ final class TerminalManager {
     @ObservationIgnored let runtime: AppRuntime
     /// This window's theme — each window styles itself from its own profile.
     @ObservationIgnored let theme = SidebarTheme()
+    @ObservationIgnored private var appearanceObserver: NSObjectProtocol?
+
+    /// Whether the window renders dark right now: the theme's choice, or the
+    /// Mac's setting when the theme says "system".
+    var isDarkAppearance: Bool {
+        switch theme.appearance {
+        case .dark: true
+        case .light: false
+        case .system:
+            NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        }
+    }
+
+    /// Ghostty's color scheme reports to programs in the tab; keep it in step
+    /// with the window's appearance.
+    func syncTerminalColorScheme() {
+        runtime.ghostty.setColorScheme(dark: isDarkAppearance)
+    }
     /// The NSWindow hosting this manager's content — set by WindowRoot.
-    @ObservationIgnored weak var window: NSWindow?
+    @ObservationIgnored weak var window: NSWindow? {
+        didSet { observeWindowShape() }
+    }
+    @ObservationIgnored private var windowShapeObservers: [NSObjectProtocol] = []
+
+    /// The radius AppKit draws this window's corners with (16 on macOS 26,
+    /// 0 in full screen). Every pane inset from the edge subtracts its inset
+    /// from this so its corners stay concentric with the window's.
+    private(set) var windowCornerRadius: CGFloat = WindowConfigurator.fallbackWindowCornerRadius
+
+    private func observeWindowShape() {
+        windowShapeObservers.forEach { NotificationCenter.default.removeObserver($0) }
+        windowShapeObservers.removeAll()
+        guard let window else { readWindowCornerRadius(); return }
+        // The shape toolbar decides the radius, so it must be attached before
+        // the first read — the configurator view may not have run yet.
+        WindowConfigurator.installShapeToolbar(window)
+        readWindowCornerRadius()
+        let names: [Notification.Name] = [
+            NSWindow.didEnterFullScreenNotification,
+            NSWindow.didExitFullScreenNotification,
+            NSWindow.didChangeScreenNotification,
+            NSWindow.didBecomeKeyNotification,
+        ]
+        windowShapeObservers = names.map { name in
+            NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
+                self?.readWindowCornerRadius()
+            }
+        }
+    }
+
+    private func readWindowCornerRadius() {
+        var radius = window.flatMap(WindowConfigurator.systemCornerRadius)
+            ?? WindowConfigurator.fallbackWindowCornerRadius
+        // AppKit keeps reporting the windowed radius in full screen, where the
+        // window is drawn square.
+        if window?.styleMask.contains(.fullScreen) == true { radius = 0 }
+        if radius != windowCornerRadius { windowCornerRadius = radius }
+    }
     /// Whether this is the primary (first) window — the one whose tabs swap
     /// in and out on profile switches. Maintained by AppRuntime's registry.
     var isMain: Bool = false
@@ -62,16 +118,21 @@ final class TerminalManager {
         let savedIndex = UserDefaults.standard.integer(forKey: "activeProfileIndex")
         self.activeProfileIndex = runtime.profiles.indices.contains(savedIndex) ? savedIndex : 0
         theme.apply(from: activeProfile)
-        runtime.ghostty.setColorScheme(dark: theme.brightness < 0.5)
+        syncTerminalColorScheme()
 
         // Theme edits in this window persist to this window's active profile.
         theme.onThemeChanged = { [weak self] in
             guard let self else { return }
             self.runtime.captureTheme(self.theme, forProfileAt: self.activeProfileIndex)
         }
-        theme.onBrightnessChanged = { [weak self] value in
-            self?.runtime.ghostty.setColorScheme(dark: value < 0.5)
+        theme.onAppearanceChanged = { [weak self] _ in
+            self?.syncTerminalColorScheme()
         }
+        // "System" appearance follows the Mac; re-sync when it flips.
+        appearanceObserver = DistributedNotificationCenter.default().addObserver(
+            forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil, queue: .main
+        ) { [weak self] _ in self?.syncTerminalColorScheme() }
     }
 
     // MARK: - Forwarding: app-level state
@@ -199,7 +260,7 @@ final class TerminalManager {
 
         let newProfile = runtime.profiles[index]
         theme.apply(from: newProfile)
-        runtime.ghostty.setColorScheme(dark: theme.brightness < 0.5)
+        syncTerminalColorScheme()
 
         if isMain {
             let stored = runtime.takeStoredSessions(forProfileID: newProfile.id)

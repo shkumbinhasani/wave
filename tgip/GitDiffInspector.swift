@@ -9,9 +9,6 @@ struct GitDiffPresentation: Identifiable, Equatable {
 }
 
 struct RepoDirtyBadge: View {
-    // lightText threaded in: rendered in the sidebar's detached NSHostingView, where a
-    // self-observed theme change doesn't repaint — see note in Sidebar.
-    let lightText: Bool
     let status: GitRepoStatus
     var isFocused: Bool
 
@@ -22,22 +19,21 @@ struct RepoDirtyBadge: View {
             Text("\(status.dirtyCount)")
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
         }
-        .foregroundStyle(Color(red: 1.0, green: 0.82, blue: 0.45).opacity(isFocused ? 0.96 : 0.84))
+        .foregroundStyle(Color.orange.opacity(isFocused ? 1 : 0.85))
         .padding(.horizontal, 7)
         .padding(.vertical, 4)
         .background(
             Capsule(style: .continuous)
-                .fill(Color(red: 0.28, green: 0.17, blue: 0.06).opacity(isFocused ? 0.85 : 0.62))
+                .fill(Color.orange.opacity(isFocused ? 0.22 : 0.14))
         )
         .overlay {
             Capsule(style: .continuous)
-                .strokeBorder(SidebarTheme.adaptiveForeground(lightText: lightText, opacity: isFocused ? 0.14 : 0.08), lineWidth: 1)
+                .strokeBorder(.separator, lineWidth: 1)
         }
     }
 }
 
 private struct InspectorButton: View {
-    @Environment(SidebarTheme.self) private var theme
     let label: String
     let icon: String
     let action: () -> Void
@@ -51,12 +47,12 @@ private struct InspectorButton: View {
                 Text(label)
                     .font(.system(size: 12, weight: .medium))
             }
-            .foregroundStyle(theme.adaptiveForeground(opacity: hovering ? 0.8 : 0.5))
+            .foregroundStyle(Color.label(hovering ? 0.8 : 0.5))
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(theme.adaptiveForeground(opacity: hovering ? 0.12 : 0.06))
+                    .fill(Color.label(hovering ? 0.12 : 0.06))
             )
         }
         .buttonStyle(.plain)
@@ -66,7 +62,6 @@ private struct InspectorButton: View {
 
 struct GitDiffInspector: View {
     @Environment(TerminalManager.self) var manager
-    @Environment(SidebarTheme.self) private var theme
     @StateObject private var loader: GitDiffLoader
     @FocusState private var isFocused: Bool
 
@@ -121,21 +116,9 @@ struct GitDiffInspector: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background {
-            ZStack {
-                VisualEffectView(material: .hudWindow, blendingMode: .withinWindow, emphasized: false)
-                    .opacity(0.8)
-
-                LinearGradient(
-                    colors: [
-                        theme.adaptiveScrim(opacity: 0.08),
-                        theme.adaptiveScrim(opacity: 0.04)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            }
+            PanelBackdrop(cornerRadius: cornerRadius)
         }
-        .paneChrome(fallbackRadius: cornerRadius, border: theme.adaptiveForeground(opacity: 0.14))
+        .paneChrome(cornerRadius: cornerRadius)
         .shadow(color: Color.black.opacity(0.10), radius: 20, y: 10)
         .focusable()
         .focusEffectDisabled()
@@ -206,21 +189,21 @@ struct GitDiffInspector: View {
                 HStack(spacing: 8) {
                     Image(systemName: "arrow.triangle.branch")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Color(red: 1.0, green: 0.82, blue: 0.45))
+                        .foregroundStyle(.orange)
 
                     Text(repoName)
                         .font(.system(size: 18, weight: .semibold, design: .rounded))
-                        .foregroundStyle(theme.adaptiveForeground(opacity: 0.95))
+                        .foregroundStyle(.primary)
                 }
 
                 Text(presentation.repoRoot)
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(theme.adaptiveForeground(opacity: 0.48))
+                    .foregroundStyle(.tertiary)
                     .lineLimit(1)
 
                 Text(statusLine)
                     .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(theme.adaptiveForeground(opacity: 0.66))
+                    .foregroundStyle(.secondary)
             }
 
             Spacer(minLength: 16)
@@ -240,7 +223,7 @@ struct GitDiffInspector: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 18)
-        .background(theme.adaptiveForeground(opacity: 0.04))
+        .background(Color.label(0.04))
         .preventWindowDrag()
     }
 
@@ -249,14 +232,14 @@ struct GitDiffInspector: View {
             HStack {
                 Text("Changed Files")
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(theme.adaptiveForeground(opacity: 0.76))
+                    .foregroundStyle(.secondary)
 
                 Spacer()
 
                 if let status {
                     Text("\(status.dirtyCount)")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundStyle(theme.adaptiveForeground(opacity: 0.44))
+                        .foregroundStyle(.tertiary)
                 }
             }
             .padding(.horizontal, 16)
@@ -289,7 +272,7 @@ struct GitDiffInspector: View {
                 )
             }
         }
-        .background(theme.adaptiveForeground(opacity: 0.03))
+        .background(Color.label(0.03))
     }
 
     private var diffPane: some View {
@@ -299,11 +282,11 @@ struct GitDiffInspector: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(currentFile.displayName)
                             .font(.system(size: 14, weight: .semibold, design: .rounded))
-                            .foregroundStyle(theme.adaptiveForeground(opacity: 0.92))
+                            .foregroundStyle(.primary)
 
                         Text(currentFile.path)
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .foregroundStyle(theme.adaptiveForeground(opacity: 0.46))
+                            .foregroundStyle(.tertiary)
                             .lineLimit(1)
                     }
 
@@ -321,7 +304,7 @@ struct GitDiffInspector: View {
                 }
                 .padding(.horizontal, 18)
                 .padding(.vertical, 14)
-                .background(theme.adaptiveForeground(opacity: 0.02))
+                .background(Color.label(0.02))
 
                 Divider().opacity(0.22)
             }
@@ -332,8 +315,7 @@ struct GitDiffInspector: View {
                 if loader.isLoading {
                     ProgressView("Loading diff...")
                         .progressViewStyle(.circular)
-                        .tint(theme.adaptiveForeground(opacity: 0.8))
-                        .foregroundStyle(theme.adaptiveForeground(opacity: 0.68))
+                        .foregroundStyle(.secondary)
                 } else if let errorMessage = loader.errorMessage {
                     GitInspectorEmptyState(
                         title: "Couldn't load diff",
@@ -352,7 +334,7 @@ struct GitDiffInspector: View {
     }
 
     // Background is intentionally absent — the inspector sits inside ContentView's
-    // themed background (vibrancy + accent + brightness), so it stays translucent.
+    // themed glass, so it stays translucent.
 
     private var statusLine: String {
         guard let status else { return "Resolving repository status..." }
@@ -368,7 +350,6 @@ struct GitDiffInspector: View {
 }
 
 private struct GitChangedFileRow: View {
-    @Environment(SidebarTheme.self) private var theme
     let file: GitChangedFile
     let isSelected: Bool
     let action: () -> Void
@@ -386,13 +367,13 @@ private struct GitChangedFileRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(file.displayName)
                         .font(.system(size: 12, weight: isSelected ? .semibold : .regular))
-                        .foregroundStyle(theme.adaptiveForeground(opacity: isSelected ? 0.95 : 0.75))
+                        .foregroundStyle(Color.label(isSelected ? 0.95 : 0.75))
                         .lineLimit(1)
 
                     if let parentPath = file.parentPath {
                         Text(parentPath)
                             .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundStyle(theme.adaptiveForeground(opacity: 0.32))
+                            .foregroundStyle(.tertiary)
                             .lineLimit(1)
                     }
                 }
@@ -410,8 +391,8 @@ private struct GitChangedFileRow: View {
             .contentShape(Rectangle())
             .background(
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isSelected ? theme.adaptiveForeground(opacity: 0.12) :
-                          hovering ? theme.adaptiveForeground(opacity: 0.06) :
+                    .fill(isSelected ? Color.label(0.12) :
+                          hovering ? Color.label(0.06) :
                           Color.clear)
             )
         }
@@ -421,7 +402,6 @@ private struct GitChangedFileRow: View {
 }
 
 private struct GitInspectorEmptyState: View {
-    @Environment(SidebarTheme.self) private var theme
     let title: String
     let message: String
 
@@ -429,15 +409,15 @@ private struct GitInspectorEmptyState: View {
         VStack(spacing: 10) {
             Image(systemName: "doc.text.magnifyingglass")
                 .font(.system(size: 22, weight: .medium))
-                .foregroundStyle(theme.adaptiveForeground(opacity: 0.34))
+                .foregroundStyle(.tertiary)
 
             Text(title)
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
-                .foregroundStyle(theme.adaptiveForeground(opacity: 0.82))
+                .foregroundStyle(.secondary)
 
             Text(message)
                 .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(theme.adaptiveForeground(opacity: 0.5))
+                .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 300)
         }
@@ -883,12 +863,13 @@ private extension GitChangedFile {
     }
 
     var tintColor: Color {
-        if isConflicted { return Color(red: 1.0, green: 0.42, blue: 0.38) }
-        if isUntracked { return Color(red: 0.42, green: 0.86, blue: 0.56) }
-        if stagedState == .deleted || unstagedState == .deleted { return Color(red: 1.0, green: 0.5, blue: 0.42) }
-        if stagedState == .added || unstagedState == .added { return Color(red: 0.42, green: 0.86, blue: 0.56) }
-        if stagedState == .renamed || unstagedState == .renamed { return Color(red: 1.0, green: 0.76, blue: 0.38) }
-        return Color(red: 0.48, green: 0.74, blue: 1.0)
+        // System colors adapt to appearance and the Increase Contrast setting.
+        if isConflicted { return .red }
+        if isUntracked { return .green }
+        if stagedState == .deleted || unstagedState == .deleted { return .red }
+        if stagedState == .added || unstagedState == .added { return .green }
+        if stagedState == .renamed || unstagedState == .renamed { return .orange }
+        return .blue
     }
 }
 
